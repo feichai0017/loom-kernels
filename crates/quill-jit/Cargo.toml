@@ -8,12 +8,8 @@ repository = "https://github.com/feichai0017/quillsql"
 
 [dependencies]
 arrow = { workspace = true }
-melior = { workspace = true, optional = true }
-quill-mlir = { version = "0.3.1", path = "../quill-mlir", optional = true }
+melior = { workspace = true }
+quill-mlir = { version = "0.3.1", path = "../quill-mlir" }
 quill-plan = { version = "0.3.1", path = "../quill-plan" }
 quill-runtime = { version = "0.3.1", path = "../quill-runtime" }
 serde = { workspace = true }
-
-[features]
-default = []
-jit-mlir = ["dep:melior", "dep:quill-mlir"]

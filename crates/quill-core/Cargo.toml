@@ -14,7 +14,3 @@ quill-jit = { version = "0.3.1", path = "../quill-jit" }
 serde = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
-
-[features]
-default = []
-jit-mlir = ["quill-df/jit-mlir", "quill-jit/jit-mlir"]

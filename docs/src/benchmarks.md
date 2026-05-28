@@ -11,8 +11,8 @@ QuillSQL uses benchmarks to separate three different claims:
 
 The current code has a real `CompiledPipelineExec` node in the DataFusion hot
 path for both record and scalar-sum pipelines, and its execution body uses
-QuillSQL's fixed-width Arrow batch kernels. With `jit-mlir` and
-`QUILL_JIT=mlir`, the multi-column fixed-width record pipeline and the f64 and
+QuillSQL's fixed-width Arrow batch kernels. With `QUILL_JIT=mlir`, the
+multi-column fixed-width record pipeline and the f64 and
 Q6-shaped decimal filter/sum paths can dispatch to executable MLIR kernels for
 null-free, offset-free fixed-width batches. Other compiled MLIR kernel speedups
 are intentionally not claimed as end-to-end query speedups yet.
@@ -32,27 +32,27 @@ Benchmarks:
 | `lowering/filter_project_graph` | Exact `PipelineGraph` lowering into the record pipeline shape. |
 | `compile/mlir_filter_text` | JIT expression to MLIR module generation for a filter. |
 | `compile/mlir_filter_project_text` | Fused filter/project MLIR module generation. |
-| `compile/mlir_i64_filter` | MLIR parse/lower/JIT cost for the first compiled fixed-width filter kernel. Requires `jit-mlir`. |
-| `compile/mlir_record_pipeline` | MLIR parse/lower/JIT cost for the fixed-width record pipeline. Requires `jit-mlir`. |
-| `compile/mlir_f64_filter_sum` | MLIR parse/lower/JIT cost for the first compiled fixed-width filter/sum kernel. Requires `jit-mlir`. |
-| `compile/mlir_decimal_filter_sum` | MLIR parse/lower/JIT cost for the Q6-shaped fixed-width `Date32`/`Decimal128` filter/sum kernel. Requires `jit-mlir`. |
-| `kernel/i64_filter_64k` | Compiled MLIR i64 filter execution over a 64K-row values vector, writing a byte selection mask. Requires `jit-mlir`. |
-| `kernel/record_pipeline_64k` | Compiled MLIR record pipeline execution over 64K rows, compacting projected fixed-width columns. Requires `jit-mlir`. |
-| `kernel/f64_filter_sum_64k` | Compiled MLIR f64 filter/sum execution over 64K rows. Requires `jit-mlir`. |
-| `kernel/decimal_filter_sum_64k` | Compiled MLIR Q6-shaped decimal filter/sum execution over 64K fixed-width column slices. Requires `jit-mlir`. |
+| `compile/mlir_i64_filter` | MLIR parse/lower/JIT cost for the first compiled fixed-width filter kernel. |
+| `compile/mlir_record_pipeline` | MLIR parse/lower/JIT cost for the fixed-width record pipeline. |
+| `compile/mlir_f64_filter_sum` | MLIR parse/lower/JIT cost for the first compiled fixed-width filter/sum kernel. |
+| `compile/mlir_decimal_filter_sum` | MLIR parse/lower/JIT cost for the Q6-shaped fixed-width `Date32`/`Decimal128` filter/sum kernel. |
+| `kernel/i64_filter_64k` | Compiled MLIR i64 filter execution over a 64K-row values vector, writing a byte selection mask. |
+| `kernel/record_pipeline_64k` | Compiled MLIR record pipeline execution over 64K rows, compacting projected fixed-width columns. |
+| `kernel/f64_filter_sum_64k` | Compiled MLIR f64 filter/sum execution over 64K rows. |
+| `kernel/decimal_filter_sum_64k` | Compiled MLIR Q6-shaped decimal filter/sum execution over 64K fixed-width column slices. |
 | `pipeline/record_filter_project_64k` | Direct fixed-width Arrow record pipeline execution outside DataFusion planning. |
 | `pipeline/scalar_sum_64k` | Direct fixed-width Arrow scalar-sum pipeline execution outside DataFusion planning. |
 | `sql/df/filter_project_64k` | DataFusion SQL planning/execution over a 64K-row in-memory Arrow table, including `CompiledPipelineExec` when the pattern matches. |
 | `sql/df/filter_sum_64k` | DataFusion SQL planning/execution over a 64K-row in-memory Arrow table, including `CompiledPipelineExec` when the pattern matches. |
 | `sql/df/prepared_filter_sum_64k` | Prepared-plan filter/sum execution that removes SQL parsing and logical-plan construction from the timed loop while still using DataFusion physical planning and execution. |
 
-Without `jit-mlir`, MLIR verification is a no-op. With `jit-mlir`, the same
-benchmark includes `melior` parse and verifier cost:
+The benchmark includes `melior` parse and verifier cost, so LLVM/MLIR 22 must
+be available:
 
 ```bash
 MLIR_SYS_220_PREFIX=/opt/homebrew/opt/llvm \
 LLVM_SYS_220_PREFIX=/opt/homebrew/opt/llvm \
-cargo bench --bench jit_micro --features jit-mlir -- --sample-size 10
+cargo bench --bench jit_micro -- --sample-size 10
 ```
 
 ## TPC-H
@@ -71,7 +71,7 @@ measurements:
 ```bash
 cargo bench --bench tpch -- --sample-size 10
 scripts/bench_tpch.sh
-QUILL_BENCH_FEATURES=jit-mlir QUILL_JIT=mlir scripts/bench_tpch.sh
+QUILL_JIT=mlir scripts/bench_tpch.sh
 ```
 
 Generated data is outside version control. Useful knobs:
@@ -82,10 +82,9 @@ Generated data is outside version control. Useful knobs:
 | `QUILL_TPCH_GEN_THREADS` | Number of generator threads. |
 | `QUILL_TPCH_REGENERATE=1` | Delete and rebuild the generated data directory. |
 | `QUILL_TPCH_DIR` | Use an existing Parquet dataset instead of generating one. |
-| `QUILL_BENCH_FEATURES` | Cargo features passed by the benchmark scripts, for example `jit-mlir`. |
 | `QUILL_JIT=off` | Keep the pure DataFusion physical plan for baseline measurements. |
-| `QUILL_JIT=runtime` | Use Quill's compiled pipeline runtime without executable MLIR. This is also the default. |
-| `QUILL_JIT=mlir` | Request executable MLIR dispatch after building with `jit-mlir`. |
+| `QUILL_JIT=mlir` | Use executable MLIR dispatch. This is the default. |
+| `QUILL_JIT=runtime` | Use Quill's compiled pipeline runtime without executable MLIR for comparison. |
 
 When `QUILL_TPCH_DIR` is set, the directory can contain either
 `<table>.parquet` files or table directories:
@@ -120,7 +119,7 @@ When reporting results, include:
 
 - exact git commit
 - command line and feature flags
-- CPU, memory, OS, Rust version, and LLVM/MLIR version if `jit-mlir` is enabled
+- CPU, memory, OS, Rust version, and LLVM/MLIR version
 - TPC-H scale factor and data format
 - whether file-system cache was warm
 - whether the number is JIT lowering, DataFusion end-to-end, or compiled

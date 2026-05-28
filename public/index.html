@@ -293,9 +293,9 @@ SELECT * FROM t WHERE v &gt; 10;</code></pre>
             lowers supported expressions into a small IR, emits MLIR arith
             functions, and verifies them through melior.
           </p>
-          <pre><code>MLIR_SYS_220_PREFIX=/opt/homebrew/opt/llvm \
-LLVM_SYS_220_PREFIX=/opt/homebrew/opt/llvm \
-cargo test --features jit-mlir</code></pre>
+          <pre><code>export MLIR_SYS_220_PREFIX=/opt/homebrew/opt/llvm
+export LLVM_SYS_220_PREFIX=/opt/homebrew/opt/llvm
+cargo test</code></pre>
         </article>
 
         <article class="panel wide">

@@ -1,9 +1,5 @@
 use crate::{JitError, JitResult, PipelineSpec, QuillDialectModule};
-#[cfg(not(feature = "jit-mlir"))]
-use crate::{JitExpr, JitProjection, QuillDialectOp, QuillDialectSink, QuillDialectSource};
 
-#[cfg(not(feature = "jit-mlir"))]
-use super::emit;
 use super::MlirModule;
 
 pub(super) fn lower_quill_dialect(module: &QuillDialectModule) -> JitResult<MlirModule> {
@@ -23,7 +19,6 @@ pub(super) fn lower_quill_dialect(module: &QuillDialectModule) -> JitResult<Mlir
     }
 }
 
-#[cfg(feature = "jit-mlir")]
 fn lower_with_quill_pass(module: &QuillDialectModule) -> JitResult<MlirModule> {
     use melior::{ir::Module, pass, utility};
 
@@ -52,86 +47,13 @@ fn lower_with_quill_pass(module: &QuillDialectModule) -> JitResult<MlirModule> {
     })
 }
 
-#[cfg(not(feature = "jit-mlir"))]
-fn lower_with_quill_pass(module: &QuillDialectModule) -> JitResult<MlirModule> {
-    match module.pipeline_spec() {
-        Some(PipelineSpec::F64FilterSum { .. }) => {
-            let (predicate, measure) = filter_sum_exprs(module)?;
-            emit::lower_f64_filter_sum_with_symbol(
-                module.symbol.clone(),
-                predicate,
-                measure,
-                Some("quill_dialect"),
-            )
-        }
-        Some(PipelineSpec::DecimalFilterSum { .. }) => {
-            let (predicate, measure) = filter_sum_exprs(module)?;
-            emit::lower_decimal_filter_sum_with_symbol(
-                module.symbol.clone(),
-                predicate,
-                measure,
-                Some("quill_dialect"),
-            )
-        }
-        _ => Err(JitError::UnsupportedExpr(
-            "Quill pass fallback only supports plain_sum".to_string(),
-        )),
-    }
-}
-
-#[cfg(feature = "jit-mlir")]
 fn lower_filter_project(module: &QuillDialectModule) -> JitResult<MlirModule> {
     lower_with_quill_pass(module)
 }
 
-#[cfg(not(feature = "jit-mlir"))]
-fn lower_filter_project(module: &QuillDialectModule) -> JitResult<MlirModule> {
-    let (predicate, projections) = filter_project_exprs(module)?;
-    emit::lower_record_pipeline_with_symbol(
-        module.symbol.clone(),
-        predicate,
-        projections,
-        Some("quill_dialect"),
-    )
-}
-
-#[cfg(feature = "jit-mlir")]
 fn verify_formal_quill_module(module: &QuillDialectModule) -> JitResult<()> {
     super::verify::verify_module(&MlirModule {
         symbol: module.symbol.clone(),
         text: module.to_mlir_text()?,
     })
-}
-
-#[cfg(not(feature = "jit-mlir"))]
-fn verify_formal_quill_module(_module: &QuillDialectModule) -> JitResult<()> {
-    Ok(())
-}
-
-#[cfg(not(feature = "jit-mlir"))]
-fn filter_project_exprs(module: &QuillDialectModule) -> JitResult<(&JitExpr, &[JitProjection])> {
-    match (&module.source, module.ops.as_slice(), &module.sink) {
-        (
-            QuillDialectSource::ArrowBatch,
-            [QuillDialectOp::Filter { predicate }, QuillDialectOp::Project { projections }],
-            QuillDialectSink::RecordBatch,
-        ) => Ok((predicate, projections)),
-        _ => Err(JitError::UnsupportedExpr(
-            "quill dialect lowering currently supports filter -> project".to_string(),
-        )),
-    }
-}
-
-#[cfg(not(feature = "jit-mlir"))]
-fn filter_sum_exprs(module: &QuillDialectModule) -> JitResult<(&JitExpr, &JitExpr)> {
-    match (&module.source, module.ops.as_slice(), &module.sink) {
-        (
-            QuillDialectSource::ArrowBatch,
-            [QuillDialectOp::Filter { predicate }],
-            QuillDialectSink::PlainSum { measure },
-        ) => Ok((predicate, measure)),
-        _ => Err(JitError::UnsupportedExpr(
-            "quill dialect lowering currently supports filter -> plain_sum".to_string(),
-        )),
-    }
 }

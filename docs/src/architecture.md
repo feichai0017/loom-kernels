@@ -50,7 +50,7 @@ pipelines, and wraps compiled results as DataFusion `ExecutionPlan`s. The core
 JIT and runtime crates do not depend on DataFusion.
 
 The MLIR backend emits a formal Quill dialect module from `PipelineGraph`, verifies
-that module through `melior` when `jit-mlir` is enabled, and then lowers covered
+that module through `melior`, and then lowers covered
 pipeline specs to executable `scf/arith/llvm` modules. The physical optimizer can
 replace filter/project and plain `SUM` pipelines with `CompiledPipelineExec`;
 the current executable node runs fixed-width Arrow pipeline kernels implemented
@@ -62,8 +62,8 @@ filter kernel that writes a byte selection mask, a multi-column
 `decimal128` projection outputs, and a unified Quill-dialect
 `filter -> plain SUM` lowering for both `f64` and Q6-shaped
 `Date32`/`Decimal128` inputs. `CompiledPipelineExec` invokes the record and
-scalar-sum kernels through thread-local MLIR execution caches when `jit-mlir` is
-enabled, `JitOptions::mlir_execution()` is selected, and the input batch has no
+scalar-sum kernels through thread-local MLIR execution caches when
+`JitOptions::mlir_execution()` is selected and the input batch has no
 nulls or slice offsets. The dispatch layer consumes `PipelineSpec`; it no longer
 re-parses runtime expressions to guess input columns. CLI, server, and benchmark binaries map
 `QUILL_JIT=mlir` to that option at startup. Unsupported expressions and unsafe
@@ -82,7 +82,7 @@ QuillSQL keeps one semantic pipeline graph plus an explicit lowering boundary:
   `quill.exec`, `quill.sink`, `quill.column`, and `quill.yield` operations.
   `filter`, `project`, `plain_sum`, and the grouped aggregate sink carry scalar
   work in single-block regions instead of string attributes.
-- `crates/quill-mlir`: the optional C++/TableGen package that defines
+- `crates/quill-mlir`: the C++/TableGen package that defines
   `!quill.batch`, `!quill.selection`, `!quill.row`, `!quill.scalar`, ODS
   verifiers, and the registered pass names `quill-canonicalize-pipeline` and
   `convert-quill-to-loops`.

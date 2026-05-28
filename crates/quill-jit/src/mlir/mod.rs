@@ -1,5 +1,4 @@
 mod compiled;
-#[cfg(feature = "jit-mlir")]
 mod dispatch;
 mod emit;
 mod lower;
@@ -25,12 +24,10 @@ pub type MlirColumn = quill_runtime::FixedColumn;
 #[derive(Debug, Default)]
 pub struct MlirBackend;
 
-#[cfg(feature = "jit-mlir")]
 pub use compiled::{
     CompiledDecimalFilterSum, CompiledF64FilterSum, CompiledI64Filter, CompiledRecordPipeline,
     DecimalFilterSumOutput, F64FilterSumOutput, FixedColumnInput, RecordPipelineOutput,
 };
-#[cfg(feature = "jit-mlir")]
 pub use dispatch::{execute_filter_project, execute_filter_sum};
 
 impl MlirBackend {
@@ -39,7 +36,7 @@ impl MlirBackend {
     }
 
     pub fn is_available(&self) -> bool {
-        cfg!(feature = "jit-mlir")
+        true
     }
 
     pub fn lower_filter(&self, predicate: &JitExpr) -> JitResult<MlirModule> {
@@ -125,21 +122,18 @@ impl MlirBackend {
         QuillDialectModule::from_graph(symbol, graph)
     }
 
-    #[cfg(feature = "jit-mlir")]
     pub fn invoke_i64_predicate(&self, predicate: &JitExpr, value: i64) -> JitResult<bool> {
         let module = self.lower_i64_predicate(predicate)?;
         self.verify_module(&module)?;
         compiled::invoke_i64_predicate(&module, value)
     }
 
-    #[cfg(feature = "jit-mlir")]
     pub fn compile_i64_filter(&self, predicate: &JitExpr) -> JitResult<CompiledI64Filter> {
         let module = self.lower_i64_filter(predicate)?;
         self.verify_module(&module)?;
         compiled::compile_i64_filter(&module)
     }
 
-    #[cfg(feature = "jit-mlir")]
     pub fn compile_record_pipeline(
         &self,
         predicate: &JitExpr,
@@ -163,8 +157,6 @@ impl MlirBackend {
         compiled::compile_record_pipeline(&module, columns, output_types)
     }
 
-    #[cfg(feature = "jit-mlir")]
-    #[cfg(feature = "jit-mlir")]
     pub fn compile_f64_filter_sum(
         &self,
         predicate: &JitExpr,
@@ -176,7 +168,6 @@ impl MlirBackend {
         compiled::compile_f64_filter_sum(&module, columns)
     }
 
-    #[cfg(feature = "jit-mlir")]
     pub fn compile_decimal_filter_sum(
         &self,
         predicate: &JitExpr,

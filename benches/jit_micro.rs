@@ -5,7 +5,6 @@ use datafusion::arrow::array::{Float64Array, Int64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch;
 use quill_core::database::{Database, DatabaseOptions};
-#[cfg(feature = "jit-mlir")]
 use quill_jit::{FixedColumnInput, RecordPipelineOutput};
 use quill_jit::{JitOptions, MlirBackend, PipelineLowering};
 use quill_plan::{
@@ -105,7 +104,6 @@ fn measure() -> JitExpr {
     }
 }
 
-#[cfg(feature = "jit-mlir")]
 fn q6_decimal_predicate() -> JitExpr {
     and(
         and(
@@ -134,7 +132,6 @@ fn q6_decimal_predicate() -> JitExpr {
     )
 }
 
-#[cfg(feature = "jit-mlir")]
 fn q6_decimal_measure() -> JitExpr {
     JitExpr::Binary {
         op: JitBinaryOp::Mul,
@@ -148,7 +145,6 @@ fn q6_decimal_measure() -> JitExpr {
     }
 }
 
-#[cfg(feature = "jit-mlir")]
 fn and(left: JitExpr, right: JitExpr) -> JitExpr {
     JitExpr::Binary {
         op: JitBinaryOp::And,
@@ -159,7 +155,6 @@ fn and(left: JitExpr, right: JitExpr) -> JitExpr {
     }
 }
 
-#[cfg(feature = "jit-mlir")]
 fn compare(op: JitBinaryOp, left: JitExpr, right: JitExpr) -> JitExpr {
     JitExpr::Binary {
         op,
@@ -170,7 +165,6 @@ fn compare(op: JitBinaryOp, left: JitExpr, right: JitExpr) -> JitExpr {
     }
 }
 
-#[cfg(feature = "jit-mlir")]
 fn date_col(index: usize, name: &str) -> JitExpr {
     JitExpr::Column {
         index,
@@ -180,12 +174,10 @@ fn date_col(index: usize, name: &str) -> JitExpr {
     }
 }
 
-#[cfg(feature = "jit-mlir")]
 fn date_lit(value: i32) -> JitExpr {
     JitExpr::Literal(JitScalar::Date32(value))
 }
 
-#[cfg(feature = "jit-mlir")]
 fn decimal_col(index: usize, name: &str, scale: i8) -> JitExpr {
     JitExpr::Column {
         index,
@@ -198,7 +190,6 @@ fn decimal_col(index: usize, name: &str, scale: i8) -> JitExpr {
     }
 }
 
-#[cfg(feature = "jit-mlir")]
 fn decimal_lit(value: i128, precision: u8, scale: i8) -> JitExpr {
     JitExpr::Literal(JitScalar::Decimal128 {
         value,
@@ -246,8 +237,6 @@ fn bench_pipeline_graph_and_mlir(c: &mut Criterion) {
             )
         });
     });
-
-    #[cfg(feature = "jit-mlir")]
     c.bench_function("compile/mlir_i64_filter", |b| {
         b.iter(|| {
             black_box(
@@ -257,8 +246,6 @@ fn bench_pipeline_graph_and_mlir(c: &mut Criterion) {
             )
         });
     });
-
-    #[cfg(feature = "jit-mlir")]
     c.bench_function("compile/mlir_record_pipeline", |b| {
         b.iter(|| {
             black_box(
@@ -268,8 +255,6 @@ fn bench_pipeline_graph_and_mlir(c: &mut Criterion) {
             )
         });
     });
-
-    #[cfg(feature = "jit-mlir")]
     c.bench_function("compile/mlir_f64_filter_sum", |b| {
         let measure = measure();
         let predicate = sum_predicate();
@@ -281,8 +266,6 @@ fn bench_pipeline_graph_and_mlir(c: &mut Criterion) {
             )
         });
     });
-
-    #[cfg(feature = "jit-mlir")]
     c.bench_function("compile/mlir_decimal_filter_sum", |b| {
         let predicate = q6_decimal_predicate();
         let measure = q6_decimal_measure();
@@ -437,7 +420,6 @@ fn bench_quill_filter_sum_kernel(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "jit-mlir")]
 fn bench_compiled_i64_filter_kernel(c: &mut Criterion) {
     let row_count = 65_536_i64;
     let values = (0..row_count)
@@ -458,7 +440,6 @@ fn bench_compiled_i64_filter_kernel(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "jit-mlir")]
 fn bench_compiled_record_pipeline_kernel(c: &mut Criterion) {
     let row_count = 65_536_i64;
     let ids = (0..row_count).collect::<Vec<_>>();
@@ -498,7 +479,6 @@ fn bench_compiled_record_pipeline_kernel(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "jit-mlir")]
 fn bench_compiled_f64_filter_sum_kernel(c: &mut Criterion) {
     let row_count = 65_536_i64;
     let predicate_values = (0..row_count)
@@ -538,7 +518,6 @@ fn bench_compiled_f64_filter_sum_kernel(c: &mut Criterion) {
     });
 }
 
-#[cfg(feature = "jit-mlir")]
 fn bench_compiled_decimal_filter_sum_kernel(c: &mut Criterion) {
     let row_count = 65_536_i32;
     let shipdates = (0..row_count)
@@ -586,17 +565,6 @@ fn bench_compiled_decimal_filter_sum_kernel(c: &mut Criterion) {
     });
 }
 
-#[cfg(not(feature = "jit-mlir"))]
-criterion_group!(
-    benches,
-    bench_pipeline_graph_and_mlir,
-    bench_quill_filter_project_kernel,
-    bench_quill_filter_sum_kernel,
-    bench_datafusion_filter_project,
-    bench_datafusion_filter_sum
-);
-
-#[cfg(feature = "jit-mlir")]
 criterion_group!(
     benches,
     bench_pipeline_graph_and_mlir,

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-#[cfg(feature = "jit-mlir")]
 use datafusion::arrow::array::Date32Array;
 use datafusion::arrow::array::{Array, Decimal128Array, Float64Array, Int64Array};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -210,7 +209,6 @@ async fn disabled_jit_keeps_datafusion_physical_plan() {
     );
 }
 
-#[cfg(feature = "jit-mlir")]
 #[tokio::test]
 async fn filter_project_mlir_execution_returns_expected_rows() {
     let db = database_with_mlir_execution();
@@ -251,7 +249,6 @@ async fn filter_project_mlir_execution_returns_expected_rows() {
     );
 }
 
-#[cfg(feature = "jit-mlir")]
 #[tokio::test]
 async fn filter_project_mlir_execution_materializes_fixed_width_columns() {
     let db = database_with_mlir_execution();
@@ -388,7 +385,6 @@ async fn debug_trace_reports_filter_sum_candidate() {
     );
 }
 
-#[cfg(feature = "jit-mlir")]
 #[tokio::test]
 async fn f64_filter_sum_mlir_execution_preserves_empty_sum_null() {
     let db = database_with_mlir_execution();
@@ -493,13 +489,12 @@ async fn parquet_q6_shape_uses_decimal_filter_sum_candidate() {
             .iter()
             .any(|candidate| candidate.kernel.name() == "filter_sum"
                 && candidate.backend == "mlir"
-                && candidate.executable == cfg!(feature = "jit-mlir")),
+                && candidate.executable),
         "{:?}",
         trace.jit_candidates
     );
 }
 
-#[cfg(feature = "jit-mlir")]
 #[tokio::test]
 async fn parquet_q6_mlir_execution_returns_null_for_empty_sum() {
     let dir = TempDir::new().expect("temp dir");

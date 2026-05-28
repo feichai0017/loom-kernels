@@ -55,7 +55,7 @@ impl MlirJitRule {
     }
 
     pub fn enabled() -> bool {
-        cfg!(feature = "jit-mlir")
+        true
     }
 
     pub fn inspect_plan(&self, plan: Arc<dyn ExecutionPlan>) -> Vec<JitCandidate> {

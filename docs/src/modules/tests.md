@@ -16,20 +16,19 @@ Common commands:
 
 ```bash
 cargo test
-cargo test --features jit-mlir
 cargo clippy --all-targets -- -D warnings
 cargo bench --no-run
 ```
 
-The `jit-mlir` feature requires local MLIR/LLVM libraries. It builds the
-optional `quill-mlir` C++/TableGen package, verifies formal Quill dialect
-regions, and runs compiled ExecutionEngine smoke tests. On a Homebrew LLVM 22
-installation, set:
+The default build requires local MLIR/LLVM 22 libraries. It builds the
+`quill-mlir` C++/TableGen package, verifies formal Quill dialect regions, and
+runs compiled ExecutionEngine smoke tests. On a Homebrew LLVM 22 installation,
+set:
 
 ```bash
 MLIR_SYS_220_PREFIX=/opt/homebrew/opt/llvm \
 LLVM_SYS_220_PREFIX=/opt/homebrew/opt/llvm \
-cargo test --features jit-mlir
+cargo test
 ```
 
 ## Documentation

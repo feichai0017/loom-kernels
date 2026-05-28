@@ -14,7 +14,7 @@ CLI, server, tests, and benchmarks.
 | `quill-runtime` | Arrow batch binding, fixed-width kernels, aggregate state, and result materialization. |
 | `quill-jit` | Compiler orchestration, frontend adapter trait, Quill dialect emission, and MLIR lowering. |
 | `quill-df` | DataFusion frontend adapter, physical optimizer rule, and `CompiledPipelineExec`. |
-| `quill-mlir` | Optional C++/TableGen Quill dialect registration and MLIR pass extension points. |
+| `quill-mlir` | C++/TableGen Quill dialect registration and MLIR pass extension points. |
 
 ## Database (`crates/quill-core/src/database.rs`)
 
@@ -57,8 +57,8 @@ The JIT subdirectories have stricter internal boundaries:
   currently covers the Q6-shaped decimal filter/sum path.
 - `quill-jit/src/mlir/emit.rs`: textual MLIR emission helpers for QuillSQL JIT expressions
   and fixed-width kernels.
-- `quill-jit/src/mlir/verify.rs`: feature-gated MLIR parser/verifier setup.
-- `quill-jit/src/mlir/compiled.rs`: feature-gated `ExecutionEngine` invocation artifacts.
+- `quill-jit/src/mlir/verify.rs`: MLIR parser/verifier setup.
+- `quill-jit/src/mlir/compiled.rs`: `ExecutionEngine` invocation artifacts.
 - `quill-df/src/exec.rs`: unified DataFusion physical execution node for compiled
   record and scalar aggregate pipelines.
 - `quill-runtime/src/kernel.rs`: `PipelineSpec`, `PredicateSpec`, and compiled pipeline

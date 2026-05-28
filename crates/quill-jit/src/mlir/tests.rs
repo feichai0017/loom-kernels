@@ -1,4 +1,3 @@
-#[cfg(feature = "jit-mlir")]
 use crate::{AggregateFunc, FixedColumnInput, GroupAggregate};
 use crate::{
     JitBinaryOp, JitExpr, JitProjection, JitScalar, JitType, MlirBackend, PipelineGraph,
@@ -93,7 +92,6 @@ fn emits_q6_quill_dialect_pipeline_spec() {
     assert!(!text.contains("measure ="));
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn verifies_formal_quill_dialect_pipeline() {
     let pipeline = PipelineGraph::filter_sum(q6_decimal_predicate(), q6_decimal_measure());
@@ -106,7 +104,6 @@ fn verifies_formal_quill_dialect_pipeline() {
     MlirBackend::new().verify_module(&module).unwrap();
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn verifies_formal_group_aggregate_dialect_pipeline() {
     let key = JitExpr::Column {
@@ -135,7 +132,6 @@ fn verifies_formal_group_aggregate_dialect_pipeline() {
     MlirBackend::new().verify_module(&module).unwrap();
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn rejects_invalid_quill_filter_region_result() {
     let text = r#"
@@ -161,7 +157,6 @@ module {
     assert!(MlirBackend::new().verify_module(&module).is_err());
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn rejects_invalid_quill_group_aggregate_region() {
     let text = r#"
@@ -201,14 +196,9 @@ fn lowers_q6_quill_dialect_to_mlir() {
     assert_eq!(module.symbol, "q6_decimal_pipeline");
     assert!(module.text.contains("func.func @q6_decimal_pipeline"));
     assert!(module.text.contains("i128"));
-    #[cfg(feature = "jit-mlir")]
-    {
-        assert!(module.text.contains("llvm.emit_c_interface"));
-        assert!(module.text.contains("scf.for"));
-        assert!(!module.text.contains("quill."));
-    }
-    #[cfg(not(feature = "jit-mlir"))]
-    assert!(module.text.contains("qjit.lowering = quill_dialect"));
+    assert!(module.text.contains("llvm.emit_c_interface"));
+    assert!(module.text.contains("scf.for"));
+    assert!(!module.text.contains("quill."));
     MlirBackend::new().verify_module(&module).unwrap();
 }
 
@@ -228,16 +218,7 @@ fn emits_i64_filter_module() {
 
     let module = MlirBackend::new().lower_i64_filter(&predicate).unwrap();
     assert!(module.text.contains("func.func @quill_i64_filter_"));
-    #[cfg(feature = "jit-mlir")]
     assert!(module.text.contains("scf.for"));
-    #[cfg(not(feature = "jit-mlir"))]
-    #[cfg(feature = "jit-mlir")]
-    assert!(module.text.contains("scf.for"));
-    #[cfg(not(feature = "jit-mlir"))]
-    #[cfg(feature = "jit-mlir")]
-    assert!(module.text.contains("scf.for"));
-    #[cfg(not(feature = "jit-mlir"))]
-    assert!(module.text.contains("scf.for unsigned"));
     assert!(module.text.contains("llvm.load"));
     assert!(module.text.contains("llvm.store"));
     MlirBackend::new().verify_module(&module).unwrap();
@@ -252,17 +233,9 @@ fn emits_record_pipeline_module() {
         .lower_record_pipeline(&predicate, &projections)
         .unwrap();
     assert!(module.text.contains("func.func @quill_record_pipeline_"));
-    #[cfg(feature = "jit-mlir")]
-    {
-        assert!(module.text.contains("llvm.emit_c_interface"));
-        assert!(module.text.contains("scf.for"));
-        assert!(!module.text.contains("quill."));
-    }
-    #[cfg(not(feature = "jit-mlir"))]
-    {
-        assert!(module.text.contains("qjit.lowering = quill_dialect"));
-        assert!(module.text.contains("scf.for unsigned"));
-    }
+    assert!(module.text.contains("llvm.emit_c_interface"));
+    assert!(module.text.contains("scf.for"));
+    assert!(!module.text.contains("quill."));
     assert!(module.text.contains("scf.if"));
     assert!(module.text.contains("llvm.load"));
     assert!(module.text.contains("llvm.store"));
@@ -278,17 +251,8 @@ fn emits_f64_filter_sum_module() {
         .lower_f64_filter_sum(&predicate, &measure)
         .unwrap();
     assert!(module.text.contains("func.func @quill_f64_filter_sum_"));
-    #[cfg(feature = "jit-mlir")]
-    {
-        assert!(module.text.contains("llvm.emit_c_interface"));
-        assert!(!module.text.contains("quill."));
-    }
-    #[cfg(not(feature = "jit-mlir"))]
-    {
-        assert!(module.text.contains("qjit.lowering = quill_dialect"));
-        assert!(module.text.contains("scf.for unsigned"));
-    }
-    #[cfg(feature = "jit-mlir")]
+    assert!(module.text.contains("llvm.emit_c_interface"));
+    assert!(!module.text.contains("quill."));
     assert!(module.text.contains("scf.for"));
     assert!(module.text.contains("scf.if"));
     assert!(module.text.contains("arith.mulf"));
@@ -307,17 +271,9 @@ fn emits_decimal_filter_sum_module() {
         .unwrap();
 
     assert!(module.text.contains("func.func @quill_decimal_filter_sum_"));
-    #[cfg(feature = "jit-mlir")]
-    {
-        assert!(module.text.contains("llvm.emit_c_interface"));
-        assert!(module.text.contains("scf.for"));
-        assert!(!module.text.contains("quill."));
-    }
-    #[cfg(not(feature = "jit-mlir"))]
-    {
-        assert!(module.text.contains("qjit.lowering = quill_dialect"));
-        assert!(module.text.contains("scf.for unsigned"));
-    }
+    assert!(module.text.contains("llvm.emit_c_interface"));
+    assert!(module.text.contains("scf.for"));
+    assert!(!module.text.contains("quill."));
     assert!(module.text.contains("scf.if"));
     assert!(module.text.contains("i128"));
     assert!(module.text.contains("arith.muli"));
@@ -326,7 +282,6 @@ fn emits_decimal_filter_sum_module() {
     MlirBackend::new().verify_module(&module).unwrap();
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn invokes_i64_predicate_with_execution_engine() {
     let predicate = i64_gt_ten(false);
@@ -336,7 +291,6 @@ fn invokes_i64_predicate_with_execution_engine() {
     assert!(backend.invoke_i64_predicate(&predicate, 11).unwrap());
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn reuses_compiled_i64_predicate_artifact() {
     let predicate = i64_gt_ten(false);
@@ -348,7 +302,6 @@ fn reuses_compiled_i64_predicate_artifact() {
     assert!(compiled.invoke(11).unwrap());
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn invokes_compiled_i64_filter_kernel() {
     let predicate = i64_gt_ten(false);
@@ -361,7 +314,6 @@ fn invokes_compiled_i64_filter_kernel() {
     assert_eq!(output, [0, 0, 1, 1]);
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn invokes_compiled_i64_filter_with_nonzero_column_index() {
     let predicate = JitExpr::Binary {
@@ -385,7 +337,6 @@ fn invokes_compiled_i64_filter_with_nonzero_column_index() {
     assert_eq!(output, [0, 1, 1]);
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn invokes_compiled_record_pipeline_kernel() {
     let predicate = JitExpr::Binary {
@@ -432,7 +383,6 @@ fn invokes_compiled_record_pipeline_kernel() {
     assert_eq!(&output[..output_len], [201, 301]);
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn invokes_compiled_f64_filter_sum_kernel() {
     let predicate = i64_gt_ten(false);
@@ -465,7 +415,6 @@ fn invokes_compiled_f64_filter_sum_kernel() {
     assert_eq!(output.count, 2);
 }
 
-#[cfg(feature = "jit-mlir")]
 #[test]
 fn invokes_compiled_decimal_filter_sum_kernel() {
     let predicate = q6_decimal_predicate();

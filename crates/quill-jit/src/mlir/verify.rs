@@ -1,10 +1,8 @@
-#[cfg(feature = "jit-mlir")]
 use crate::JitError;
 use crate::JitResult;
 
 use super::MlirModule;
 
-#[cfg(feature = "jit-mlir")]
 use melior::{
     dialect::DialectRegistry,
     ir::{operation::OperationLike, Module},
@@ -16,7 +14,6 @@ pub(super) fn verify_module(module: &MlirModule) -> JitResult<()> {
     verify_mlir_text(&module.text)
 }
 
-#[cfg(feature = "jit-mlir")]
 fn verify_mlir_text(text: &str) -> JitResult<()> {
     let context = mlir_context();
     let module = Module::parse(&context, text)
@@ -30,12 +27,6 @@ fn verify_mlir_text(text: &str) -> JitResult<()> {
     }
 }
 
-#[cfg(not(feature = "jit-mlir"))]
-fn verify_mlir_text(_text: &str) -> JitResult<()> {
-    Ok(())
-}
-
-#[cfg(feature = "jit-mlir")]
 pub(super) fn mlir_context() -> Context {
     let context = Context::new();
     let registry = DialectRegistry::new();

@@ -50,15 +50,14 @@ That keeps the system extensible without adding query-specific fused operators.
 | `quill-plan` | Frontend-neutral `PipelineGraph`, expressions, types, stages, and sinks. |
 | `quill-jit` | JIT orchestration, frontend adapter trait, dialect emission, and MLIR backend. |
 | `quill-runtime` | Arrow binding, safety checks, fixed-width kernels, and result materialization. |
-| `quill-mlir` | Optional C++/TableGen MLIR dialect and lowering pass package. |
+| `quill-mlir` | C++/TableGen MLIR dialect and lowering pass package. |
 
 ## Why `quill-mlir` Is Native
 
 Rust builds pipeline graphs, integrates with DataFusion, and manages Arrow
 batches. The formal MLIR dialect, TableGen operation definitions, verifiers, and
 pass registration live in `quill-mlir` because those are native MLIR C++ API
-surfaces. Rust calls into that package through `melior` and the `jit-mlir`
-feature.
+surfaces. Rust calls into that package through `melior`.
 
 Current compiled coverage is intentionally narrow: fixed-width
 `filter -> project -> record_batch`, `f64 filter -> SUM`, and Q6-shaped
@@ -97,20 +96,16 @@ let out = db.run("SELECT count(*) FROM events WHERE user_id IS NOT NULL").await?
 ## JIT And Benchmarks
 
 ```bash
-# Default checks.
+# Requires LLVM/MLIR 22. Homebrew's llvm package works on macOS.
+export MLIR_SYS_220_PREFIX=/opt/homebrew/opt/llvm
+export LLVM_SYS_220_PREFIX=/opt/homebrew/opt/llvm
+
 cargo test
 cargo clippy --all-targets -- -D warnings
 cargo bench --no-run
 
-# MLIR path. Adjust prefixes for your local LLVM/MLIR install.
-MLIR_SYS_220_PREFIX=/opt/homebrew/opt/llvm \
-LLVM_SYS_220_PREFIX=/opt/homebrew/opt/llvm \
-cargo test --features jit-mlir
-
 QUILL_JIT=mlir \
-MLIR_SYS_220_PREFIX=/opt/homebrew/opt/llvm \
-LLVM_SYS_220_PREFIX=/opt/homebrew/opt/llvm \
-cargo bench --features jit-mlir --bench tpch -- q6_scan_filter_aggregate
+cargo bench --bench tpch -- q6_scan_filter_aggregate
 ```
 
 Benchmark harnesses:
@@ -121,8 +116,9 @@ Benchmark harnesses:
 Useful knobs:
 
 - `QUILL_JIT=off`: pure DataFusion baseline.
-- `QUILL_JIT=runtime`: Quill Arrow runtime without executable MLIR.
-- `QUILL_JIT=mlir`: executable MLIR kernels when built with `jit-mlir`.
+- `QUILL_JIT=mlir`: executable MLIR kernels. This is the default mode.
+- `QUILL_JIT=runtime`: Quill Arrow runtime without executable MLIR, kept for
+  benchmark comparison.
 - `QUILL_TPCH_SF=1`: generate SF1 TPC-H data.
 - `QUILL_TPCH_DIR=/path/to/tpch-parquet`: use an existing Parquet dataset.
 

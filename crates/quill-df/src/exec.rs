@@ -133,7 +133,6 @@ impl CompiledPipelineExec {
         runtime: &FilterProjectKernel,
         batch: RecordBatch,
     ) -> Result<RecordBatch> {
-        #[cfg(feature = "jit-mlir")]
         if let Some(output) = quill_jit::execute_filter_project(&self.kernel, runtime, &batch)
             .map_err(crate::map_jit_err)?
         {
@@ -148,7 +147,6 @@ impl CompiledPipelineExec {
         runtime: &FilterSumKernel,
         batch: &RecordBatch,
     ) -> Result<FilterSumValue> {
-        #[cfg(feature = "jit-mlir")]
         if let Some(partial) = quill_jit::execute_filter_sum(&self.kernel, runtime, batch)
             .map_err(crate::map_jit_err)?
         {

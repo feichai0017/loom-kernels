@@ -114,36 +114,20 @@ fn bench_tpch(c: &mut Criterion) {
 
 fn query_modes(query: &TpchQuery) -> Vec<TpchMode> {
     if query.compare_jit_modes {
-        #[cfg(feature = "jit-mlir")]
-        {
-            vec![
-                TpchMode {
-                    name: "datafusion",
-                    jit: JitOptions::disabled(),
-                },
-                TpchMode {
-                    name: "runtime",
-                    jit: JitOptions::runtime(),
-                },
-                TpchMode {
-                    name: "mlir",
-                    jit: JitOptions::mlir_execution(),
-                },
-            ]
-        }
-        #[cfg(not(feature = "jit-mlir"))]
-        {
-            vec![
-                TpchMode {
-                    name: "datafusion",
-                    jit: JitOptions::disabled(),
-                },
-                TpchMode {
-                    name: "runtime",
-                    jit: JitOptions::runtime(),
-                },
-            ]
-        }
+        vec![
+            TpchMode {
+                name: "datafusion",
+                jit: JitOptions::disabled(),
+            },
+            TpchMode {
+                name: "runtime",
+                jit: JitOptions::runtime(),
+            },
+            TpchMode {
+                name: "mlir",
+                jit: JitOptions::mlir_execution(),
+            },
+        ]
     } else {
         vec![TpchMode {
             name: "datafusion",

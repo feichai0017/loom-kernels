@@ -13,7 +13,3 @@ quill-jit = { version = "0.3.1", path = "../quill-jit" }
 quill-plan = { version = "0.3.1", path = "../quill-plan" }
 quill-runtime = { version = "0.3.1", path = "../quill-runtime" }
 serde = { workspace = true }
-
-[features]
-default = []
-jit-mlir = ["quill-jit/jit-mlir"]

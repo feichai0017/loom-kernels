@@ -6,7 +6,7 @@ pub struct JitOptions {
 
 impl Default for JitOptions {
     fn default() -> Self {
-        Self::runtime()
+        Self::mlir_execution()
     }
 }
 
@@ -41,7 +41,7 @@ impl JitOptions {
     }
 
     pub fn mlir_execution_enabled(self) -> bool {
-        self.enabled && self.mlir_execution && cfg!(feature = "jit-mlir")
+        self.enabled && self.mlir_execution
     }
 
     pub fn enabled(self) -> bool {
@@ -51,7 +51,8 @@ impl JitOptions {
     fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "mlir" | "compiled" | "on" | "1" | "true" => Some(Self::mlir_execution()),
-            "" | "runtime" => Some(Self::runtime()),
+            "" => Some(Self::mlir_execution()),
+            "runtime" => Some(Self::runtime()),
             "off" | "0" | "false" => Some(Self::disabled()),
             _ => None,
         }
