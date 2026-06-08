@@ -1,8 +1,18 @@
+# QuillCache gateway in front of a 2-vLLM fleet on Modal.
+# policy: prefix-affinity (cache-affine) | round-robin (spread) | least-loaded | greedy
 bind: 127.0.0.1:8080
+policy: prefix-affinity
 engines:
-  - id: modal-vllm
+  - id: modal-vllm-a
     kind: Vllm
     base_url: https://feichai0017--quillcache-vllm-serve.modal.run
+    model_id: Qwen/Qwen2.5-0.5B-Instruct
+    tokenizer_id: Qwen/Qwen2.5-0.5B-Instruct
+    tenant_id: default
+    locality_domain: modal
+  - id: modal-vllm-b
+    kind: Vllm
+    base_url: https://feichai0017--quillcache-vllm-b-serve.modal.run
     model_id: Qwen/Qwen2.5-0.5B-Instruct
     tokenizer_id: Qwen/Qwen2.5-0.5B-Instruct
     tenant_id: default

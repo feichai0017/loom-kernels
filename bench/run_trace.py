@@ -15,6 +15,7 @@ import json
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 # A long, identical system prompt across requests -> a big shared prefix, which
@@ -106,6 +107,9 @@ def main():
     if totals:
         print(f"total ms  p50 {pct(totals, 0.5):.1f}  p99 {pct(totals, 0.99):.1f}")
     print(f"responses with a QuillCache local-hit header: {hits}/{len(ok)}")
+    engines = Counter(r["headers"].get("x-quillcache-engine-id", "?") for r in ok)
+    if engines:
+        print("engine distribution: " + "  ".join(f"{e}: {n}" for e, n in sorted(engines.items())))
     for r in ok:
         if r["headers"]:
             print("sample decision headers:", json.dumps(r["headers"]))

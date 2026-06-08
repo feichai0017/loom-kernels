@@ -24,7 +24,10 @@ import modal
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 
 image = modal.Image.debian_slim(python_version="3.12").pip_install("vllm", "huggingface_hub")
-app = modal.App("quillcache-vllm")
+# App name is parameterizable so one script can deploy a fleet:
+#   modal deploy deploy/modal_vllm.py                              # quillcache-vllm
+#   QC_VLLM_APP=quillcache-vllm-b modal deploy deploy/modal_vllm.py  # 2nd instance
+app = modal.App(os.environ.get("QC_VLLM_APP", "quillcache-vllm"))
 
 
 @app.function(gpu="L4", image=image, timeout=60 * 60, max_containers=1)
