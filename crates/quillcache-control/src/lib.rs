@@ -517,6 +517,64 @@ mod tests {
     }
 
     #[test]
+    fn kv_events_correct_inferred_residency_on_eviction() {
+        let mut control = ControlPlane::new(vec![engine()]);
+        let block = |hash: &str| {
+            KvBlockKey::external_hash(ExternalKvBlockKey {
+                model_id: "Qwen/Qwen3-0.6B".to_string(),
+                tokenizer_id: "Qwen/Qwen3-0.6B".to_string(),
+                adapter_id: None,
+                tenant_id: "tenant-a".to_string(),
+                prefix_hash: "root".to_string(),
+                block_hash: hash.to_string(),
+                block_index: 0,
+                token_count: 64,
+            })
+        };
+        let request = RequestShape {
+            id: "r".to_string(),
+            model_id: "Qwen/Qwen3-0.6B".to_string(),
+            tokenizer_id: "Qwen/Qwen3-0.6B".to_string(),
+            adapter_id: None,
+            tenant_id: "tenant-a".to_string(),
+            blocks: vec![block("blk-1"), block("blk-2")],
+            estimated_decode_tokens: 16,
+            slo: SloTarget::default(),
+        };
+
+        // Inferred floor: the gateway records the placement after routing.
+        control.observe_placement("vllm-a", &request, 1024);
+        assert_eq!(control.residency().len(), 2);
+
+        // Precise correction: the engine evicts blk-1 and emits a KV event.
+        // Inferred residency would stay stale; the event corrects it.
+        control
+            .ingest(KvEventBatch {
+                engine_id: "vllm-a".to_string(),
+                ts_ms: None,
+                model_id: None,
+                tokenizer_id: None,
+                adapter_id: None,
+                tenant_id: None,
+                bytes_per_block: None,
+                events: vec![KvEvent::BlockRemoved(BlockRemovedEvent {
+                    block_hashes: vec!["blk-1".to_string()],
+                    medium: None,
+                    group_idx: None,
+                })],
+            })
+            .unwrap();
+
+        assert_eq!(control.residency().len(), 1);
+        assert_eq!(control.residency().snapshot()[0].key.block_hash, "blk-2");
+
+        // A re-request now sees only blk-2 as a hit; blk-1 correctly recomputes.
+        let decision = control.route(&request).unwrap();
+        assert_eq!(decision.local_hits.len(), 1);
+        assert_eq!(decision.recomputes.len(), 1);
+    }
+
+    #[test]
     fn control_plane_accepts_a_custom_index_backend() {
         // The runtime seam: any IndexBackend can back the control plane.
         let control = ControlPlane::with_index(vec![engine()], Box::new(MemoryIndex::new()));
