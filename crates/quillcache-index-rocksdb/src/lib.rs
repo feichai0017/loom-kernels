@@ -5,19 +5,38 @@
 //! range scan:
 //!
 //! ```text
-//! model \0 tokenizer \0 adapter \0 tenant \0 prefix_hash \0 block_hash \0
-//!   block_index(BE) \0 worker \0 tier   ->   serialized CacheResidency
+//! PRIMARY \0 model \0 tokenizer \0 adapter \0 tenant \0 prefix_hash \0
+//!   block_hash \0 block_index(BE) \0 worker \0 tier   ->   serialized CacheResidency
 //! ```
 //!
-//! `put` is a single write (no read-modify-write), so the store behaves like a
-//! real LSM under ingest. The value is one [`CacheResidency`]; a block resident
-//! on several workers/tiers maps to several keys sharing a block prefix.
+//! `put` writes the record above plus a `SECONDARY`-tagged reverse-index entry
+//! so eviction can seek straight to a block instead of scanning the scope:
+//!
+//! ```text
+//! SECONDARY \0 model \0 tokenizer \0 adapter \0 tenant \0 block_hash \0
+//!   worker \0 tier \0 prefix_hash \0 block_index(BE)   ->   the primary key
+//! ```
+//!
+//! Both are single writes (no read-modify-write), so the store still behaves
+//! like a real LSM under ingest. The value of a primary key is one
+//! [`CacheResidency`]; a block resident on several workers/tiers maps to several
+//! keys sharing a block prefix. `remove_block` is given a block hash but not its
+//! prefix, so without the reverse index it would scan + deserialize the whole
+//! scope (the churn bottleneck the index benchmark surfaced); with it, eviction
+//! is an O(matches) range seek, at the cost of a second key per residency.
 
 use quillcache_core::{CacheResidency, IdentityScope, IndexBackend, IndexMetrics, KvBlockKey};
 use rocksdb::{Direction, IteratorMode, Options, DB};
 use std::path::{Path, PathBuf};
 
 const SEP: u8 = 0x00;
+/// Namespace tag for primary residency records (prefix-ordered).
+const PRIMARY: u8 = 0x01;
+/// Namespace tag for the reverse `block_hash -> primary key` index.
+const SECONDARY: u8 = 0x02;
+
+/// An owned RocksDB key or value, as yielded by the iterator.
+type OwnedKey = Box<[u8]>;
 
 /// A persistent residency index backed by RocksDB (an LSM-tree store).
 pub struct RocksIndex {
@@ -80,8 +99,10 @@ impl RocksIndex {
         buf.push(SEP);
     }
 
+    /// Primary scope prefix (`PRIMARY \0 scope`), the seek point for an
+    /// identity-scoped `prefix_scan`.
     fn scope_prefix(scope: &IdentityScope) -> Vec<u8> {
-        let mut buf = Vec::new();
+        let mut buf = vec![PRIMARY];
         Self::enc_scope(
             &mut buf,
             &scope.model_id,
@@ -92,9 +113,9 @@ impl RocksIndex {
         buf
     }
 
-    fn key_for(residency: &CacheResidency) -> Vec<u8> {
+    fn primary_key_for(residency: &CacheResidency) -> Vec<u8> {
         let k = &residency.key;
-        let mut buf = Vec::new();
+        let mut buf = vec![PRIMARY];
         Self::enc_scope(
             &mut buf,
             &k.model_id,
@@ -111,6 +132,49 @@ impl RocksIndex {
         buf.extend_from_slice(residency.worker_id.as_bytes());
         buf.push(SEP);
         buf.extend_from_slice(residency.tier.to_string().as_bytes());
+        buf
+    }
+
+    /// Reverse-index key: `SECONDARY \0 scope \0 block_hash \0 worker \0 tier \0
+    /// prefix_hash \0 block_index`. Ordering block_hash + worker first is what
+    /// makes `remove_block` a bounded range seek. The value is the primary key.
+    fn secondary_key_for(residency: &CacheResidency) -> Vec<u8> {
+        let k = &residency.key;
+        let mut buf = vec![SECONDARY];
+        Self::enc_scope(
+            &mut buf,
+            &k.model_id,
+            &k.tokenizer_id,
+            k.adapter_id.as_deref(),
+            &k.tenant_id,
+        );
+        buf.extend_from_slice(k.block_hash.as_bytes());
+        buf.push(SEP);
+        buf.extend_from_slice(residency.worker_id.as_bytes());
+        buf.push(SEP);
+        buf.extend_from_slice(residency.tier.to_string().as_bytes());
+        buf.push(SEP);
+        buf.extend_from_slice(k.prefix_hash.as_bytes());
+        buf.push(SEP);
+        buf.extend_from_slice(&k.block_index.to_be_bytes());
+        buf
+    }
+
+    /// Reverse-index seek prefix for evicting `(scope, worker, block_hash)`
+    /// across every tier / prefix / block index it is resident under.
+    fn remove_scan_prefix(scope: &IdentityScope, worker_id: &str, block_hash: &str) -> Vec<u8> {
+        let mut buf = vec![SECONDARY];
+        Self::enc_scope(
+            &mut buf,
+            &scope.model_id,
+            &scope.tokenizer_id,
+            scope.adapter_id.as_deref(),
+            &scope.tenant_id,
+        );
+        buf.extend_from_slice(block_hash.as_bytes());
+        buf.push(SEP);
+        buf.extend_from_slice(worker_id.as_bytes());
+        buf.push(SEP);
         buf
     }
 
@@ -141,9 +205,12 @@ impl IndexBackend for RocksIndex {
     }
 
     fn put(&mut self, residency: CacheResidency) {
-        let key = Self::key_for(&residency);
+        let primary = Self::primary_key_for(&residency);
         if let Ok(value) = serde_json::to_vec(&residency) {
-            let _ = self.db.put(key, value);
+            let _ = self.db.put(&primary, value);
+            // Reverse index: block_hash -> primary key, for O(matches) eviction.
+            let secondary = Self::secondary_key_for(&residency);
+            let _ = self.db.put(&secondary, &primary);
         }
     }
 
@@ -166,49 +233,57 @@ impl IndexBackend for RocksIndex {
     }
 
     fn remove_block(&mut self, scope: &IdentityScope, worker_id: &str, block_hash: &str) -> usize {
-        let prefix = Self::scope_prefix(scope);
-        let mut to_delete = Vec::new();
+        // Seek the reverse index straight to this (scope, block_hash, worker)
+        // instead of scanning the whole identity scope. Each hit's value is the
+        // primary key to drop; we drop the reverse entry alongside it.
+        let prefix = Self::remove_scan_prefix(scope, worker_id, block_hash);
+        let mut pairs: Vec<(OwnedKey, OwnedKey)> = Vec::new();
         for item in self
             .db
             .iterator(IteratorMode::From(prefix.as_slice(), Direction::Forward))
         {
-            let (k, v) = match item {
+            let (sec_key, prim_key) = match item {
                 Ok(kv) => kv,
                 Err(_) => break,
             };
-            if !k.starts_with(prefix.as_slice()) {
+            if !sec_key.starts_with(prefix.as_slice()) {
                 break;
             }
-            if let Ok(residency) = serde_json::from_slice::<CacheResidency>(&v) {
-                if residency.key.block_hash == block_hash && residency.worker_id == worker_id {
-                    to_delete.push(k);
-                }
-            }
+            pairs.push((sec_key, prim_key));
         }
         let mut removed = 0;
-        for k in to_delete {
-            if self.db.delete(&k).is_ok() {
+        for (sec_key, prim_key) in pairs {
+            if self.db.delete(&prim_key).is_ok() {
                 removed += 1;
             }
+            let _ = self.db.delete(&sec_key);
         }
         removed
     }
 
     fn clear_worker(&mut self, worker_id: &str) {
-        let mut to_delete = Vec::new();
-        for item in self.db.iterator(IteratorMode::Start) {
+        let prefix = [PRIMARY];
+        let mut to_delete: Vec<(OwnedKey, Vec<u8>)> = Vec::new();
+        for item in self
+            .db
+            .iterator(IteratorMode::From(&prefix, Direction::Forward))
+        {
             let (k, v) = match item {
                 Ok(kv) => kv,
                 Err(_) => break,
             };
+            if !k.starts_with(&prefix) {
+                break;
+            }
             if let Ok(residency) = serde_json::from_slice::<CacheResidency>(&v) {
                 if residency.worker_id == worker_id {
-                    to_delete.push(k);
+                    to_delete.push((k, Self::secondary_key_for(&residency)));
                 }
             }
         }
-        for k in to_delete {
-            let _ = self.db.delete(&k);
+        for (primary, secondary) in to_delete {
+            let _ = self.db.delete(&primary);
+            let _ = self.db.delete(&secondary);
         }
     }
 
@@ -225,12 +300,19 @@ impl IndexBackend for RocksIndex {
     }
 
     fn snapshot(&self) -> Vec<CacheResidency> {
+        let prefix = [PRIMARY];
         let mut out = Vec::new();
-        for item in self.db.iterator(IteratorMode::Start) {
-            let (_, v) = match item {
+        for item in self
+            .db
+            .iterator(IteratorMode::From(&prefix, Direction::Forward))
+        {
+            let (k, v) = match item {
                 Ok(kv) => kv,
                 Err(_) => break,
             };
+            if !k.starts_with(&prefix) {
+                break;
+            }
             if let Ok(residency) = serde_json::from_slice::<CacheResidency>(&v) {
                 out.push(residency);
             }
@@ -239,10 +321,20 @@ impl IndexBackend for RocksIndex {
     }
 
     fn len(&self) -> usize {
-        self.db
-            .iterator(IteratorMode::Start)
-            .filter_map(Result::ok)
-            .count()
+        // Count only primary residency records, not reverse-index entries.
+        let prefix = [PRIMARY];
+        let mut n = 0;
+        for item in self
+            .db
+            .iterator(IteratorMode::From(&prefix, Direction::Forward))
+        {
+            let Ok((k, _)) = item else { break };
+            if !k.starts_with(&prefix) {
+                break;
+            }
+            n += 1;
+        }
+        n
     }
 
     fn persistent(&self) -> bool {
@@ -310,6 +402,38 @@ mod tests {
             assert!(idx.persistent());
             assert_eq!(idx.len(), 1);
             assert_eq!(idx.prefix_scan(&scope(), "b0").len(), 1);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reverse_index_remove_is_scoped_and_survives_reopen() {
+        let dir = temp_dir("reverse");
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let mut idx = RocksIndex::open(&dir).unwrap();
+            // Same block hash resident on two workers under the same prefix.
+            idx.put(CacheResidency::hbm("w0", block("root", "b0", 0), 1024));
+            idx.put(CacheResidency::hbm("w1", block("root", "b0", 0), 1024));
+            idx.put(CacheResidency::hbm("w0", block("b0", "b1", 1), 1024));
+            assert_eq!(idx.len(), 3);
+
+            // Evict only w0's copy of b0; w1's copy and b1 remain.
+            assert_eq!(idx.remove_block(&scope(), "w0", "b0"), 1);
+            assert_eq!(idx.len(), 2);
+            assert_eq!(idx.prefix_scan(&scope(), "root").len(), 1);
+            assert_eq!(idx.remove_block(&scope(), "w0", "b0"), 0); // idempotent
+        }
+        {
+            // Reverse index persisted: eviction still seeks correctly after reopen.
+            let mut idx = RocksIndex::open(&dir).unwrap();
+            assert_eq!(idx.len(), 2);
+            assert_eq!(idx.remove_block(&scope(), "w1", "b0"), 1);
+            assert!(idx.prefix_scan(&scope(), "root").is_empty());
+            // Re-put rebuilds both namespaces (eviction -> recompute).
+            idx.put(CacheResidency::hbm("w0", block("root", "b0", 0), 1024));
+            assert_eq!(idx.prefix_scan(&scope(), "root").len(), 1);
+            assert_eq!(idx.remove_block(&scope(), "w0", "b0"), 1);
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

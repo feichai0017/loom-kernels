@@ -7,15 +7,32 @@
 //! compaction). Keys use the same path-shaped encoding as the RocksDB backend:
 //!
 //! ```text
-//! model \0 tokenizer \0 adapter \0 tenant \0 prefix_hash \0 block_hash \0
-//!   block_index(BE) \0 worker \0 tier   ->   serialized CacheResidency
+//! PRIMARY \0 model \0 tokenizer \0 adapter \0 tenant \0 prefix_hash \0
+//!   block_hash \0 block_index(BE) \0 worker \0 tier   ->   serialized CacheResidency
 //! ```
+//!
+//! A second, `SECONDARY`-tagged namespace is a reverse index that lets eviction
+//! seek straight to a block instead of scanning the whole identity scope:
+//!
+//! ```text
+//! SECONDARY \0 model \0 tokenizer \0 adapter \0 tenant \0 block_hash \0
+//!   worker \0 tier \0 prefix_hash \0 block_index(BE)   ->   the primary key
+//! ```
+//!
+//! `remove_block` is given a block hash but not its prefix, so against the
+//! primary order alone it would scan + deserialize the whole scope (the churn
+//! bottleneck the index benchmark surfaced). The reverse index makes it an
+//! O(matches) seek, at the cost of a second key per residency on disk.
 
 use holt::{Durability, RangeEntry, Tree, TreeBuilder};
 use quillcache_core::{CacheResidency, IdentityScope, IndexBackend, IndexMetrics, KvBlockKey};
 use std::path::{Path, PathBuf};
 
 const SEP: u8 = 0x00;
+/// Namespace tag for primary residency records (prefix-ordered).
+const PRIMARY: u8 = 0x01;
+/// Namespace tag for the reverse `block_hash -> primary key` index.
+const SECONDARY: u8 = 0x02;
 
 /// A persistent residency index backed by Holt (an adaptive radix tree).
 pub struct HoltIndex {
@@ -84,8 +101,10 @@ impl HoltIndex {
         buf.push(SEP);
     }
 
+    /// Primary scope prefix (`PRIMARY \0 scope`), the seek point for an
+    /// identity-scoped `prefix_scan`.
     fn scope_prefix(scope: &IdentityScope) -> Vec<u8> {
-        let mut buf = Vec::new();
+        let mut buf = vec![PRIMARY];
         Self::enc_scope(
             &mut buf,
             &scope.model_id,
@@ -96,9 +115,9 @@ impl HoltIndex {
         buf
     }
 
-    fn key_for(residency: &CacheResidency) -> Vec<u8> {
+    fn primary_key_for(residency: &CacheResidency) -> Vec<u8> {
         let k = &residency.key;
-        let mut buf = Vec::new();
+        let mut buf = vec![PRIMARY];
         Self::enc_scope(
             &mut buf,
             &k.model_id,
@@ -115,6 +134,49 @@ impl HoltIndex {
         buf.extend_from_slice(residency.worker_id.as_bytes());
         buf.push(SEP);
         buf.extend_from_slice(residency.tier.to_string().as_bytes());
+        buf
+    }
+
+    /// Reverse-index key: `SECONDARY \0 scope \0 block_hash \0 worker \0 tier \0
+    /// prefix_hash \0 block_index`. Ordering block_hash + worker first is what
+    /// makes `remove_block` a bounded seek. The value is the primary key.
+    fn secondary_key_for(residency: &CacheResidency) -> Vec<u8> {
+        let k = &residency.key;
+        let mut buf = vec![SECONDARY];
+        Self::enc_scope(
+            &mut buf,
+            &k.model_id,
+            &k.tokenizer_id,
+            k.adapter_id.as_deref(),
+            &k.tenant_id,
+        );
+        buf.extend_from_slice(k.block_hash.as_bytes());
+        buf.push(SEP);
+        buf.extend_from_slice(residency.worker_id.as_bytes());
+        buf.push(SEP);
+        buf.extend_from_slice(residency.tier.to_string().as_bytes());
+        buf.push(SEP);
+        buf.extend_from_slice(k.prefix_hash.as_bytes());
+        buf.push(SEP);
+        buf.extend_from_slice(&k.block_index.to_be_bytes());
+        buf
+    }
+
+    /// Reverse-index seek prefix for evicting `(scope, worker, block_hash)`
+    /// across every tier / prefix / block index it is resident under.
+    fn remove_scan_prefix(scope: &IdentityScope, worker_id: &str, block_hash: &str) -> Vec<u8> {
+        let mut buf = vec![SECONDARY];
+        Self::enc_scope(
+            &mut buf,
+            &scope.model_id,
+            &scope.tokenizer_id,
+            scope.adapter_id.as_deref(),
+            &scope.tenant_id,
+        );
+        buf.extend_from_slice(block_hash.as_bytes());
+        buf.push(SEP);
+        buf.extend_from_slice(worker_id.as_bytes());
+        buf.push(SEP);
         buf
     }
 
@@ -141,9 +203,12 @@ impl IndexBackend for HoltIndex {
     }
 
     fn put(&mut self, residency: CacheResidency) {
-        let key = Self::key_for(&residency);
+        let primary = Self::primary_key_for(&residency);
         if let Ok(value) = serde_json::to_vec(&residency) {
-            let _ = self.tree.put(&key, &value);
+            let _ = self.tree.put(&primary, &value);
+            // Reverse index: block_hash -> primary key, for O(matches) eviction.
+            let secondary = Self::secondary_key_for(&residency);
+            let _ = self.tree.put(&secondary, &primary);
         }
     }
 
@@ -166,33 +231,33 @@ impl IndexBackend for HoltIndex {
     }
 
     fn remove_block(&mut self, scope: &IdentityScope, worker_id: &str, block_hash: &str) -> usize {
-        let prefix = Self::scope_prefix(scope);
-        let mut to_delete: Vec<Vec<u8>> = Vec::new();
+        // Seek the reverse index straight to this (scope, block_hash, worker)
+        // instead of scanning the whole identity scope. Each hit's value is the
+        // primary key to drop; we drop the reverse entry alongside it.
+        let prefix = Self::remove_scan_prefix(scope, worker_id, block_hash);
+        let mut pairs: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
         for entry in self.tree.scan(&prefix) {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => break,
             };
             if let RangeEntry::Key { key, value, .. } = entry {
-                if let Ok(residency) = serde_json::from_slice::<CacheResidency>(&value) {
-                    if residency.key.block_hash == block_hash && residency.worker_id == worker_id {
-                        to_delete.push(key.to_vec());
-                    }
-                }
+                pairs.push((key.to_vec(), value.to_vec()));
             }
         }
         let mut removed = 0;
-        for key in to_delete {
-            if self.tree.delete(key.as_slice()).unwrap_or(false) {
+        for (secondary, primary) in pairs {
+            if self.tree.delete(primary.as_slice()).unwrap_or(false) {
                 removed += 1;
             }
+            let _ = self.tree.delete(secondary.as_slice());
         }
         removed
     }
 
     fn clear_worker(&mut self, worker_id: &str) {
-        let mut to_delete: Vec<Vec<u8>> = Vec::new();
-        for entry in self.tree.range() {
+        let mut to_delete: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for entry in self.tree.scan(&[PRIMARY]) {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => break,
@@ -200,13 +265,14 @@ impl IndexBackend for HoltIndex {
             if let RangeEntry::Key { key, value, .. } = entry {
                 if let Ok(residency) = serde_json::from_slice::<CacheResidency>(&value) {
                     if residency.worker_id == worker_id {
-                        to_delete.push(key.to_vec());
+                        to_delete.push((key.to_vec(), Self::secondary_key_for(&residency)));
                     }
                 }
             }
         }
-        for key in to_delete {
-            let _ = self.tree.delete(key.as_slice());
+        for (primary, secondary) in to_delete {
+            let _ = self.tree.delete(primary.as_slice());
+            let _ = self.tree.delete(secondary.as_slice());
         }
     }
 
@@ -224,7 +290,7 @@ impl IndexBackend for HoltIndex {
 
     fn snapshot(&self) -> Vec<CacheResidency> {
         let mut out = Vec::new();
-        for entry in self.tree.range() {
+        for entry in self.tree.scan(&[PRIMARY]) {
             let entry = match entry {
                 Ok(entry) => entry,
                 Err(_) => break,
@@ -239,7 +305,12 @@ impl IndexBackend for HoltIndex {
     }
 
     fn len(&self) -> usize {
-        self.tree.range().into_iter().filter_map(Result::ok).count()
+        // Count only primary residency records, not reverse-index entries.
+        self.tree
+            .scan(&[PRIMARY])
+            .into_iter()
+            .filter_map(Result::ok)
+            .count()
     }
 
     fn persistent(&self) -> bool {
@@ -304,6 +375,39 @@ mod tests {
             assert!(idx.persistent());
             assert_eq!(idx.len(), 1);
             assert_eq!(idx.prefix_scan(&scope(), "b0").len(), 1);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reverse_index_remove_is_scoped_and_survives_reopen() {
+        let dir = temp_dir("reverse");
+        let _ = std::fs::remove_dir_all(&dir);
+        {
+            let mut idx = HoltIndex::open(&dir).unwrap();
+            // Same block hash resident on two workers under the same prefix.
+            idx.put(CacheResidency::hbm("w0", block("root", "b0", 0), 1024));
+            idx.put(CacheResidency::hbm("w1", block("root", "b0", 0), 1024));
+            idx.put(CacheResidency::hbm("w0", block("b0", "b1", 1), 1024));
+            assert_eq!(idx.len(), 3);
+
+            // Evict only w0's copy of b0; w1's copy and b1 remain.
+            assert_eq!(idx.remove_block(&scope(), "w0", "b0"), 1);
+            assert_eq!(idx.len(), 2);
+            assert_eq!(idx.prefix_scan(&scope(), "root").len(), 1);
+            assert_eq!(idx.remove_block(&scope(), "w0", "b0"), 0); // idempotent
+            idx.flush();
+        }
+        {
+            // Reverse index persisted: eviction still seeks correctly after reopen.
+            let mut idx = HoltIndex::open(&dir).unwrap();
+            assert_eq!(idx.len(), 2);
+            assert_eq!(idx.remove_block(&scope(), "w1", "b0"), 1);
+            assert!(idx.prefix_scan(&scope(), "root").is_empty());
+            // Re-put rebuilds both namespaces (eviction -> recompute).
+            idx.put(CacheResidency::hbm("w0", block("root", "b0", 0), 1024));
+            assert_eq!(idx.prefix_scan(&scope(), "root").len(), 1);
+            assert_eq!(idx.remove_block(&scope(), "w0", "b0"), 1);
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 
@@ -540,6 +540,12 @@ pub trait IndexBackend: std::fmt::Debug + Send + Sync {
 #[derive(Debug, Default)]
 pub struct MemoryIndex {
     entries: HashMap<KvBlockKey, Vec<CacheResidency>>,
+    /// Secondary reverse index: `(identity scope, block_hash) -> the set of full
+    /// keys carrying that content hash`. `remove_block` is given a block hash but
+    /// not its prefix, so without this it would scan the whole map; the reverse
+    /// index turns eviction into an O(matches) lookup. This mirrors the
+    /// secondary-namespace reverse index the persistent backends keep on disk.
+    by_hash: HashMap<(IdentityScope, String), HashSet<KvBlockKey>>,
     puts: u64,
     removes: u64,
 }
@@ -556,11 +562,16 @@ impl IndexBackend for MemoryIndex {
     }
 
     fn put(&mut self, residency: CacheResidency) {
-        let entries = self.entries.entry(residency.key.clone()).or_default();
+        let key = residency.key.clone();
+        let entries = self.entries.entry(key.clone()).or_default();
         entries.retain(|entry| {
             !(entry.worker_id == residency.worker_id && entry.tier == residency.tier)
         });
         entries.push(residency);
+        self.by_hash
+            .entry((IdentityScope::from_key(&key), key.block_hash.clone()))
+            .or_default()
+            .insert(key);
         self.puts += 1;
     }
 
@@ -577,28 +588,64 @@ impl IndexBackend for MemoryIndex {
     }
 
     fn remove_block(&mut self, scope: &IdentityScope, worker_id: &str, block_hash: &str) -> usize {
+        let map_key = (scope.clone(), block_hash.to_string());
+        let Some(keys) = self.by_hash.get(&map_key) else {
+            return 0;
+        };
+        // Snapshot the candidate keys so we can mutate `entries` while iterating.
+        let candidates: Vec<KvBlockKey> = keys.iter().cloned().collect();
         let mut removed = 0;
-        self.entries.retain(|key, entries| {
-            if scope.matches(key) && key.block_hash == block_hash {
+        let mut emptied: Vec<KvBlockKey> = Vec::new();
+        for key in candidates {
+            if let Some(entries) = self.entries.get_mut(&key) {
                 let before = entries.len();
                 entries.retain(|entry| entry.worker_id != worker_id);
                 removed += before - entries.len();
+                if entries.is_empty() {
+                    self.entries.remove(&key);
+                    emptied.push(key);
+                }
             }
-            !entries.is_empty()
-        });
+        }
+        if !emptied.is_empty() {
+            if let Some(set) = self.by_hash.get_mut(&map_key) {
+                for key in &emptied {
+                    set.remove(key);
+                }
+                if set.is_empty() {
+                    self.by_hash.remove(&map_key);
+                }
+            }
+        }
         self.removes += removed as u64;
         removed
     }
 
     fn clear_worker(&mut self, worker_id: &str) {
-        self.entries.retain(|_, entries| {
+        let mut emptied: Vec<KvBlockKey> = Vec::new();
+        self.entries.retain(|key, entries| {
             entries.retain(|entry| entry.worker_id != worker_id);
-            !entries.is_empty()
+            if entries.is_empty() {
+                emptied.push(key.clone());
+                false
+            } else {
+                true
+            }
         });
+        for key in emptied {
+            let map_key = (IdentityScope::from_key(&key), key.block_hash.clone());
+            if let Some(set) = self.by_hash.get_mut(&map_key) {
+                set.remove(&key);
+                if set.is_empty() {
+                    self.by_hash.remove(&map_key);
+                }
+            }
+        }
     }
 
     fn clear(&mut self) {
         self.entries.clear();
+        self.by_hash.clear();
     }
 
     fn snapshot(&self) -> Vec<CacheResidency> {
@@ -640,5 +687,47 @@ mod tests {
             cost.transfer_cost_us(CacheTier::Hbm, 4 * 1024 * 1024, true, true)
                 < cost.prefill_cost_us(64)
         );
+    }
+
+    fn mem_scope() -> IdentityScope {
+        IdentityScope {
+            model_id: "m".to_string(),
+            tokenizer_id: "t".to_string(),
+            adapter_id: None,
+            tenant_id: "ten".to_string(),
+        }
+    }
+
+    fn mem_block(prefix: &str, hash: &str, idx: u32) -> KvBlockKey {
+        KvBlockKey::new("m", "t", "ten", prefix, hash, idx, 64)
+    }
+
+    #[test]
+    fn remove_block_uses_the_reverse_index_and_stays_consistent() {
+        let mut idx = MemoryIndex::new();
+        idx.put(CacheResidency::hbm("w0", mem_block("root", "b0", 0), 1024));
+        idx.put(CacheResidency::hbm("w0", mem_block("b0", "b1", 1), 1024));
+        // Same block hash resident on a second worker: remove("w0", b0) must drop
+        // only w0's copy and keep w1's, and the reverse-index entry must survive.
+        idx.put(CacheResidency::hbm("w1", mem_block("root", "b0", 0), 1024));
+        assert_eq!(idx.len(), 3);
+
+        assert_eq!(idx.remove_block(&mem_scope(), "w0", "b0"), 1);
+        assert_eq!(idx.len(), 2);
+        assert_eq!(idx.prefix_scan(&mem_scope(), "root").len(), 1); // w1 still there
+        assert_eq!(idx.locate(&mem_block("root", "b0", 0)).len(), 1);
+
+        // Removing the last copy drops the reverse-index bucket; a re-put rebuilds
+        // it and the block is findable again (the eviction -> recompute cycle).
+        assert_eq!(idx.remove_block(&mem_scope(), "w1", "b0"), 1);
+        assert!(idx.prefix_scan(&mem_scope(), "root").is_empty());
+        assert_eq!(idx.remove_block(&mem_scope(), "w1", "b0"), 0); // idempotent
+        idx.put(CacheResidency::hbm("w0", mem_block("root", "b0", 0), 1024));
+        assert_eq!(idx.prefix_scan(&mem_scope(), "root").len(), 1);
+
+        // clear_worker must also prune the reverse index (no stale buckets).
+        idx.clear_worker("w0");
+        assert!(idx.prefix_scan(&mem_scope(), "root").is_empty());
+        assert_eq!(idx.remove_block(&mem_scope(), "w0", "b0"), 0);
     }
 }

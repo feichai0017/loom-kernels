@@ -124,6 +124,30 @@ recovery dominate (the common case for a residency index queried per request),
 pick LSM when on-disk footprint is the constraint. Numbers are from one machine;
 reproduce with `cargo run --features "rocksdb holt" -- bench-index --backend <b>`.
 
+### Eviction churn (and a bottleneck the benchmark caught)
+
+A residency index under HBM pressure does not just ingest and scan — it
+*evicts*. Adding a churn phase (`--churn-ops`: `remove_block` + `put` per cycle)
+surfaced that `remove_block` was **O(scope)**: given a block hash but not its
+prefix, every backend scanned and deserialized the whole identity scope to find
+one block. Eviction collapsed to ~1.4k ops/s on the persistent backends. The fix
+is a secondary `block_hash → primary key` index so eviction is an O(matches)
+seek. Same workload (1000 requests, 2008 resident, 10k scans, **500 churn
+cycles**), before vs after:
+
+| backend | churn ops/s before | churn ops/s after | speedup | on-disk after |
+| --- | --- | --- | --- | --- |
+| memory (flat map) | 69k | **1.15M** | ~17× | 0 |
+| rocksdb (LSM) | 1.4k | **154k** | ~106× | 175 KB |
+| **holt (ART)** | 1.4k | **403k** | **~295×** | 8.4 MB |
+
+The reverse index trades **~2× ingest throughput and a second key per residency
+on disk** for **two-to-three-orders-of-magnitude faster eviction** — the right
+trade for a control plane that evicts continuously. prefix-scan latency is
+unchanged. This is the benchmark working as intended: it is a research
+instrument, not a victory-lap table — it found the bottleneck, then measured the
+fix.
+
 ## Packages
 
 | Package | Role |
@@ -186,11 +210,12 @@ exact block hashes while keeping the upstream request clean. See
 - ✅ Pluggable `RoutingPolicy` with a load-only baseline and a cache-aware policy.
 - ✅ Experiment harness comparing policies × backends on one trace.
 - ✅ Holt (ART) and RocksDB (LSM) index backends + `bench-index` ART-vs-LSM comparison.
+- ✅ Eviction-churn benchmark + O(matches) `remove_block` via a secondary block_hash index (100–300× faster eviction on the persistent backends).
 - ⏳ Real-vLLM connect (M3): Modal deploy + KV-events bridge + trace runner written (`deploy/` · `bridge/` · `bench/` · `docs/m3-real-vllm.md`); live run pending a cloud GPU. SGLang connector later.
 
 ## Roadmap
 
-1. ✅ Holt (ART) + RocksDB (LSM) `IndexBackend`s + ART-vs-LSM benchmark — done; next: deepen it (true write-amplification, Holt compaction/on-disk, larger traces).
+1. ✅ Holt (ART) + RocksDB (LSM) `IndexBackend`s + ART-vs-LSM benchmark + eviction churn (O(matches) `remove_block`) — done; next: true write-amplification, Holt compaction/on-disk, larger traces.
 2. SLO-aware and session/DAG-aware routing policies.
 3. Real vLLM/SGLang KV-event connectors end-to-end; chat / RAG / agent traces.
 4. Tiered placement and eviction across HBM / DRAM / SSD / remote.
