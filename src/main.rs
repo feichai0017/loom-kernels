@@ -73,6 +73,10 @@ enum Command {
         #[arg(long, default_value_t = 4)]
         adapters: u32,
         #[arg(long, default_value_t = 2)]
+        models: u32,
+        #[arg(long, default_value_t = 2)]
+        tokenizers: u32,
+        #[arg(long, default_value_t = 2)]
         repeats: u32,
         #[arg(long, default_value_t = 64)]
         block_tokens: u32,
@@ -195,6 +199,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             prefix_blocks,
             tenants,
             adapters,
+            models,
+            tokenizers,
             repeats,
             block_tokens,
             json,
@@ -204,6 +210,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 prefix_blocks,
                 tenants,
                 adapters,
+                models,
+                tokenizers,
                 repeats,
                 block_tokens,
             });
@@ -223,8 +231,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     report.naive_reuses, report.naive_unsafe, naive_unsafe_pct
                 );
                 println!(
-                    "  unsafe: {} cross-tenant (privacy leak) · {} cross-adapter (correctness error)",
-                    report.unsafe_cross_tenant, report.unsafe_cross_adapter
+                    "  unsafe: {} cross-tenant (privacy) · {} cross-adapter · {} cross-model/quant · {} cross-tokenizer (correctness)",
+                    report.unsafe_cross_tenant,
+                    report.unsafe_cross_adapter,
+                    report.unsafe_cross_model,
+                    report.unsafe_cross_tokenizer
                 );
                 println!(
                     "identity guard: {} unsafe served · {} safe reuses preserved · {} recomputes forced",

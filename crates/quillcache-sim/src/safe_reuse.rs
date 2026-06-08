@@ -36,6 +36,14 @@ pub struct SafeReuseConfig {
     /// Extra LoRA adapters beyond the base model on tenant 0 (the cross-adapter /
     /// correctness axis).
     pub adapters: u32,
+    /// Extra model variants on tenant 0 — e.g. quantizations (fp16 vs int8 vs
+    /// fp8) or fine-tunes — that share token content but not KV numerics (the
+    /// cross-model / correctness axis; quantization is modeled as a model id).
+    pub models: u32,
+    /// Extra tokenizer versions on tenant 0 — the same text tokenizes
+    /// differently, so the "same" prefix is not the same token sequence (the
+    /// cross-tokenizer / correctness axis).
+    pub tokenizers: u32,
     /// Requests per identity. `>= 2` exercises safe same-identity reuse so the
     /// guard is shown to be *precise*, not just restrictive.
     pub repeats: u32,
@@ -50,6 +58,8 @@ impl Default for SafeReuseConfig {
             prefix_blocks: 8,
             tenants: 8,
             adapters: 4,
+            models: 2,
+            tokenizers: 2,
             repeats: 2,
             block_tokens: 64,
         }
@@ -116,11 +126,14 @@ pub fn run_safe_reuse(config: SafeReuseConfig) -> SafeReuseReport {
     let cost = CostModel::default();
     let (model, tok) = ("bench-model", "bench-tok");
 
-    // Distinct identities that all request the same content:
-    //   - one base-model identity per tenant (the cross-tenant axis), and
-    //   - extra LoRA adapters on tenant 0 (the cross-adapter axis).
-    // Tenant 0 / base is listed first, so it is the cache's first writer and
-    // every other identity collides against it.
+    // Distinct identities that all request the same content. The base identity
+    // (model, tok, no adapter, tenant-0) is listed first, so it is the cache's
+    // first writer and every other identity collides against it on exactly one
+    // axis — clean per-axis attribution:
+    //   - one base identity per tenant   -> cross-tenant (privacy),
+    //   - extra LoRA adapters on tenant 0 -> cross-adapter (correctness),
+    //   - extra model variants / quants   -> cross-model (correctness),
+    //   - extra tokenizer versions        -> cross-tokenizer (correctness).
     let mut identities: Vec<IdentityScope> = Vec::new();
     for t in 0..config.tenants.max(1) {
         identities.push(identity(model, tok, None, format!("tenant-{t}")));
@@ -130,6 +143,22 @@ pub fn run_safe_reuse(config: SafeReuseConfig) -> SafeReuseReport {
             model,
             tok,
             Some(format!("lora-{a}")),
+            "tenant-0".to_string(),
+        ));
+    }
+    for m in 1..=config.models {
+        identities.push(identity(
+            &format!("{model}-q{m}"),
+            tok,
+            None,
+            "tenant-0".to_string(),
+        ));
+    }
+    for k in 1..=config.tokenizers {
+        identities.push(identity(
+            model,
+            &format!("{tok}-v{k}"),
+            None,
             "tenant-0".to_string(),
         ));
     }
@@ -230,6 +259,8 @@ mod tests {
             prefix_blocks: 8,
             tenants: 8,
             adapters: 4,
+            models: 0,
+            tokenizers: 0,
             repeats: 2,
             block_tokens: 64,
         };
@@ -269,6 +300,8 @@ mod tests {
             prefix_blocks: 4,
             tenants: 1,
             adapters: 0,
+            models: 0,
+            tokenizers: 0,
             repeats: 3,
             block_tokens: 32,
         };
@@ -291,6 +324,8 @@ mod tests {
             prefix_blocks: 8,
             tenants: 2,
             adapters: 1,
+            models: 0,
+            tokenizers: 0,
             repeats: 40,
             block_tokens: 64,
         });
@@ -306,6 +341,38 @@ mod tests {
             adversarial.safety_overhead_pct > 25.0,
             "adversarial overhead too low: {}%",
             adversarial.safety_overhead_pct
+        );
+    }
+
+    #[test]
+    fn cross_model_and_tokenizer_collisions_are_classified() {
+        // Only model and tokenizer variants collide (no extra tenants/adapters).
+        let config = SafeReuseConfig {
+            distinct_prefixes: 10,
+            prefix_blocks: 4,
+            tenants: 1,
+            adapters: 0,
+            models: 3, // e.g. fp16 vs int8 vs fp8 vs another quant
+            tokenizers: 2,
+            repeats: 1,
+            block_tokens: 64,
+        };
+        let r = run_safe_reuse(config);
+        let units = u64::from(config.prefix_blocks * config.distinct_prefixes);
+
+        // 1 base + 3 model variants + 2 tokenizer versions = 6 identities.
+        assert_eq!(r.identities, 6);
+        // Each model/tokenizer variant collides against the base once per block.
+        assert_eq!(r.unsafe_cross_model, u64::from(config.models) * units);
+        assert_eq!(
+            r.unsafe_cross_tokenizer,
+            u64::from(config.tokenizers) * units
+        );
+        assert_eq!(r.unsafe_cross_tenant, 0);
+        assert_eq!(r.unsafe_cross_adapter, 0);
+        assert_eq!(
+            r.naive_unsafe,
+            u64::from(config.models + config.tokenizers) * units
         );
     }
 }

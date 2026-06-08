@@ -111,8 +111,12 @@ quillcache safe-reuse           # 12 identities share each prefix
 
 | policy | content-hash hits | unsafe served | of which | safe reuse kept |
 | --- | --- | --- | --- | --- |
-| naive (content hash only) | 9200 | **8800 (95.7%)** | 5600 cross-tenant leaks + 3200 cross-adapter errors | — |
+| naive (content hash only) | 12400 | **12000 (96.8%)** | 5600 cross-tenant (privacy) + 3200 cross-adapter + 1600 cross-model/quant + 1600 cross-tokenizer (correctness) | — |
 | **QuillCache (identity guard)** | — | **0** | — | 4800 |
+
+All four identity axes — tenant, adapter, model/quantization, tokenizer version —
+are exercised (`--tenants --adapters --models --tokenizers`); each variant shares
+token content but not KV tensors.
 
 The guard eliminates **all** unsafe reuse while preserving safe same-identity
 reuse, at a measured cost (here ~12.7 s of prefill recompute to avoid 8800 unsafe
