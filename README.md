@@ -176,6 +176,7 @@ exact block hashes while keeping the upstream request clean. See
 - [`docs/research-agenda.md`](docs/research-agenda.md) — claim budget and research bets.
 - [`docs/experiments.md`](docs/experiments.md) — experiment harness and baselines.
 - [`docs/mvp-runbook.md`](docs/mvp-runbook.md) — run the gateway against real vLLM.
+- [`docs/m3-real-vllm.md`](docs/m3-real-vllm.md) — connect to a real vLLM on a cloud GPU (Modal deploy, KV-events bridge, trace runner).
 
 ## Status (v0.1)
 
@@ -185,7 +186,7 @@ exact block hashes while keeping the upstream request clean. See
 - ✅ Pluggable `RoutingPolicy` with a load-only baseline and a cache-aware policy.
 - ✅ Experiment harness comparing policies × backends on one trace.
 - ✅ Holt (ART) and RocksDB (LSM) index backends + `bench-index` ART-vs-LSM comparison.
-- ⏳ vLLM ZMQ/msgpack KV-event bridge wired end-to-end; SGLang connector.
+- ⏳ Real-vLLM connect (M3): Modal deploy + KV-events bridge + trace runner written (`deploy/` · `bridge/` · `bench/` · `docs/m3-real-vllm.md`); live run pending a cloud GPU. SGLang connector later.
 
 ## Roadmap
 
