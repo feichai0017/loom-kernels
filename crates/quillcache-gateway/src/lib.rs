@@ -240,9 +240,12 @@ async fn proxy_openai_path(
             "x-quillcache-estimated-ttft-us",
             trace.estimated_ttft_us.to_string(),
         );
-    let bytes = upstream.bytes().await?;
+    // Stream the upstream body straight through (SSE chunks forwarded as they
+    // arrive) instead of buffering it, so the client's time-to-first-token
+    // reflects the real engine — QuillCache's decision headers are already set
+    // above and flush with the response head, before the first token.
     response
-        .body(axum::body::Body::from(bytes))
+        .body(axum::body::Body::from_stream(upstream.bytes_stream()))
         .map_err(GatewayHttpError::BuildResponse)
 }
 
