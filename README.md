@@ -269,14 +269,15 @@ exact block hashes while keeping the upstream request clean. See
 - ✅ Experiment harness comparing policies × backends on one trace.
 - ✅ Holt (ART) and RocksDB (LSM) index backends + `bench-index` ART-vs-LSM comparison.
 - ✅ Eviction-churn benchmark + O(matches) `remove_block` via a secondary block_hash index (100–300× faster eviction on the persistent backends).
-- ✅ Identity-governed safe reuse: `ReuseViolation` classifier + `safe-reuse` experiment quantifying the cross-tenant / cross-adapter unsafe reuse a content-hash cache would serve (and that the guard eliminates).
-- ⏳ Real-vLLM connect (M3): Modal deploy + KV-events bridge + trace runner written (`deploy/` · `bridge/` · `bench/` · `docs/m3-real-vllm.md`); live run pending a cloud GPU. SGLang connector later.
+- ✅ Identity-governed safe reuse: `ReuseViolation` classifier + `safe-reuse` experiment, and the same guard enforced inline on the gateway (`x-quillcache-reuse-refused`). Safety overhead ~1.7% on a realistic workload.
+- ✅ Real vLLM connected end-to-end (M3): proxied a real Qwen2.5 on a Modal L4 with real TTFT and decision headers. Cache-affine fleet routing across 2 vLLM instances (P99 TTFT 81 s → 4.3 s).
+- ✅ Tier-2 inferred→precise correction: a KV `BlockRemoved` event corrects stale inferred residency (verified live — a re-request's local hits drop from 2→1 after an eviction event). `deploy/modal_vllm.py` is Tier-2-ready (`QC_KV_EVENTS=1` enables `--kv-events-config` + a co-located bridge sidecar). SGLang connector later.
 
 ## Roadmap
 
 1. ✅ Holt (ART) + RocksDB (LSM) `IndexBackend`s + ART-vs-LSM benchmark + eviction churn (O(matches) `remove_block`) — done; next: true write-amplification, Holt compaction/on-disk, larger traces.
 2. ✅ SLO-aware routing (`SloAwareRouter`: SLO as a near-hard constraint, keeps a session local until load threatens the SLO, then spills) — done; next: session/DAG-aware policies.
-3. Real vLLM/SGLang KV-event connectors end-to-end; chat / RAG / agent traces.
+3. ✅ Real vLLM KV-event connector end-to-end (inferred placement + Tier-2 `/v1/kv-events` correction) — done; next: SGLang connector, chat / RAG / agent traces.
 4. Tiered placement and eviction across HBM / DRAM / SSD / remote.
 5. ✅ Identity-governed safe reuse: refuse unsafe reuse and quantify its cost (`safe-reuse`) — done; next: enforce it inline in the gateway and add cross-model/tokenizer/quant axes.
 6. Baselines: engine-local prefix caching, LMCache-style cache, Mooncake-style pool.
