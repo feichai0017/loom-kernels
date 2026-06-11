@@ -4,6 +4,7 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use futures_util::StreamExt;
 use quillcache_control::{ControlPlane, IngestSummary, PlanAction, RequestPlan, ServingMode};
 use quillcache_core::{
     DataPlane, DataPlaneAction, EngineEndpoint, ExternalKvBlockKey, IndexBackend, KvBlockKey,
@@ -22,8 +23,9 @@ use std::fs;
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
@@ -143,11 +145,44 @@ impl GatewayConfig {
     }
 }
 
+/// Live SLO goodput: of the requests served, how many produced their first token
+/// within the request's TTFT SLO budget. Measured from the gateway's own clock
+/// (arrival → first streamed chunk), not the cost model — a real online metric.
+#[derive(Debug, Default)]
+struct SloGoodput {
+    served: AtomicU64,
+    met: AtomicU64,
+    ttft_ms_sum: AtomicU64,
+}
+
+impl SloGoodput {
+    fn record(&self, ttft_ms: u64, budget_ms: u64) {
+        self.served.fetch_add(1, Ordering::Relaxed);
+        self.ttft_ms_sum.fetch_add(ttft_ms, Ordering::Relaxed);
+        if ttft_ms <= budget_ms {
+            self.met.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn snapshot(&self) -> serde_json::Value {
+        let served = self.served.load(Ordering::Relaxed);
+        let met = self.met.load(Ordering::Relaxed);
+        let sum = self.ttft_ms_sum.load(Ordering::Relaxed);
+        json!({
+            "served": served,
+            "met_slo": met,
+            "goodput_pct": if served > 0 { 100.0 * met as f64 / served as f64 } else { 0.0 },
+            "mean_ttft_ms": if served > 0 { sum as f64 / served as f64 } else { 0.0 },
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 struct GatewayState {
     control: Arc<RwLock<ControlPlane>>,
     client: Client,
     action_sink: Option<ActionSink>,
+    slo: Arc<SloGoodput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -336,6 +371,7 @@ pub async fn run(config: GatewayConfig) -> Result<(), GatewayError> {
         control: Arc::new(RwLock::new(control)),
         client: Client::new(),
         action_sink,
+        slo: Arc::new(SloGoodput::default()),
     };
     let control = state.control.clone();
     let app = router(state);
@@ -522,6 +558,7 @@ async fn state_snapshot(State(state): State<GatewayState>) -> impl IntoResponse 
         "data_plane_metrics": control.data_plane().metrics(),
         "data_plane_residency": control.data_plane().snapshot(),
         "action_sink": state.action_sink.as_ref().map(ActionSink::snapshot).unwrap_or_else(ActionSinkSnapshot::disabled),
+        "slo_goodput": state.slo.snapshot(),
         "resident_blocks": control.residency().len(),
         "residency": control.residency().snapshot(),
     }))
@@ -558,8 +595,11 @@ async fn proxy_openai_path(
     body: Bytes,
     path: &str,
 ) -> Result<Response, GatewayHttpError> {
+    // Arrival clock for the SLO-goodput measurement (arrival → first token).
+    let request_start = Instant::now();
     let mut payload: Value = serde_json::from_slice(&body)?;
     let request_shape = request_shape_from_payload(&mut payload);
+    let ttft_budget_ms = request_shape.slo.ttft_ms;
     let clean_body = serde_json::to_vec(&payload)?;
 
     let (engine, trace, action_plan) = {
@@ -720,9 +760,19 @@ async fn proxy_openai_path(
     // Stream the upstream body straight through (SSE chunks forwarded as they
     // arrive) instead of buffering it, so the client's time-to-first-token
     // reflects the real engine — QuillCache's decision headers are already set
-    // above and flush with the response head, before the first token.
+    // above and flush with the response head, before the first token. On the
+    // first chunk we record real TTFT against the SLO budget for live goodput.
+    let slo = state.slo.clone();
+    let mut recorded = false;
+    let stream = upstream.bytes_stream().inspect(move |_chunk| {
+        if !recorded {
+            recorded = true;
+            let ttft_ms = request_start.elapsed().as_millis() as u64;
+            slo.record(ttft_ms, ttft_budget_ms);
+        }
+    });
     response
-        .body(axum::body::Body::from_stream(upstream.bytes_stream()))
+        .body(axum::body::Body::from_stream(stream))
         .map_err(GatewayHttpError::BuildResponse)
 }
 
