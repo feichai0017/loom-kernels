@@ -191,6 +191,26 @@ recovery dominate (the common case for a residency index queried per request),
 pick LSM when on-disk footprint is the constraint. Numbers are from one machine;
 reproduce with `cargo run --features "rocksdb holt" -- bench-index --backend <b>`.
 
+### Write amplification (measured, not assumed)
+
+The recently published RocksDB/LSM-for-KV-cache approach left write amplification
+unanalyzed. QuillCache measures it directly — RocksDB's own flush/compaction
+statistics for the LSM, append-only accounting for the ART. On a write-heavy,
+unique-key trace (5000 requests, 40k resident, 1000 churn cycles):
+
+| backend | write amplification | physical written | on-disk (live) |
+| --- | --- | --- | --- |
+| **holt (ART)** | **1.0×** | 46 MB | 46 MB |
+| rocksdb (LSM) | **10.6×** | 36 MB | 3.4 MB |
+
+The tradeoff is exact and opposite on the two axes: **ART writes each record once
+(1× write-amp) but keeps everything (13× more disk); LSM rewrites data through
+compaction (10.6× write-amp) but reclaims space (13× less disk).** This is the
+classic append-only-vs-compaction storage tradeoff, here measured for the KV-cache
+residency index. (For an *overwrite*-heavy trace the picture flips — the LSM
+memtable collapses overwrites before they reach disk — which the same benchmark
+also shows.)
+
 ### Eviction churn (and a bottleneck the benchmark caught)
 
 A residency index under HBM pressure does not just ingest and scan — it
@@ -307,7 +327,7 @@ See [`docs/mvp-runbook.md`](docs/mvp-runbook.md) for the vLLM KV-events bridge.
 
 ## Roadmap
 
-1. ✅ Holt (ART) + RocksDB (LSM) `IndexBackend`s + ART-vs-LSM benchmark + eviction churn (O(matches) `remove_block`) — done; next: true write-amplification, Holt compaction/on-disk, larger traces.
+1. ✅ Holt (ART) + RocksDB (LSM) `IndexBackend`s + ART-vs-LSM benchmark + eviction churn (O(matches) `remove_block`) + measured write amplification (ART 1× vs LSM 10.6×) — done; next: larger traces, remote tier.
 2. ✅ SLO-aware routing (`SloAwareRouter`) and session/DAG-affine routing (`SessionAffinityRouter`: pin a session to the engine accumulating its KV) — done; next: network-aware placement.
 3. ✅ Real vLLM KV-event connector end-to-end (inferred placement + Tier-2 `/v1/kv-events` correction) — done; next: SGLang connector, chat / RAG / agent traces.
 4. ✅ Tiered placement and eviction across HBM / DRAM / SSD (`tiered`, KVBM-style) + online action-sink events — done; next: remote tier and a real vLLM/SGLang adapter.

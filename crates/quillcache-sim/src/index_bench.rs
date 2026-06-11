@@ -68,6 +68,13 @@ pub struct IndexBenchReport {
     pub scan_p999_us: f64,
     /// Reopen-from-disk time for persistent backends; `None` for in-memory.
     pub recovery_ms: Option<f64>,
+    /// Physical bytes written to storage, including LSM compaction rewrites
+    /// (0 for in-memory). Set by the backend-specific harness.
+    pub physical_bytes_written: u64,
+    /// Write amplification = physical bytes written / logical bytes. ~1× for
+    /// append-only stores (ART/Holt write each record once); higher for LSM,
+    /// which rewrites data during compaction. `0.0` when not applicable.
+    pub write_amplification: f64,
     pub metrics: IndexMetrics,
 }
 
@@ -205,6 +212,8 @@ pub fn bench_index<B: IndexBackend + ?Sized>(
         scan_p99_us,
         scan_p999_us,
         recovery_ms: None,
+        physical_bytes_written: 0,
+        write_amplification: 0.0,
         metrics: backend.metrics(),
     }
 }

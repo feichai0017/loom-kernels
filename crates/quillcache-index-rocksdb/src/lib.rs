@@ -28,6 +28,7 @@
 use quillcache_core::{CacheResidency, IdentityScope, IndexBackend, IndexMetrics, KvBlockKey};
 use rocksdb::{Direction, IteratorMode, Options, DB};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 const SEP: u8 = 0x00;
 /// Namespace tag for primary residency records (prefix-ordered).
@@ -42,6 +43,10 @@ type OwnedKey = Box<[u8]>;
 pub struct RocksIndex {
     db: DB,
     path: PathBuf,
+    /// The `Options` used to open the DB, kept so its shared statistics handle can
+    /// be read back for write-amplification. Behind a `Mutex` so `RocksIndex`
+    /// stays `Sync`.
+    opts: Mutex<Options>,
 }
 
 impl std::fmt::Debug for RocksIndex {
@@ -57,15 +62,55 @@ impl RocksIndex {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, rocksdb::Error> {
         let mut opts = Options::default();
         opts.create_if_missing(true);
+        // Track flush/compaction bytes so we can report real LSM write amplification.
+        opts.enable_statistics();
+        // A small memtable so even a modest residency index flushes and compacts
+        // across levels — otherwise everything stays in one memtable and the LSM
+        // write-amplification it pays at scale never shows up.
+        opts.set_write_buffer_size(256 * 1024);
+        opts.set_max_bytes_for_level_base(1024 * 1024);
         let db = DB::open(&opts, path.as_ref())?;
         Ok(Self {
             db,
             path: path.as_ref().to_path_buf(),
+            opts: Mutex::new(opts),
         })
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// Real LSM write amplification: (bytes flushed to L0 + bytes rewritten by
+    /// compaction) / user bytes written, from RocksDB's own statistics. This is
+    /// the cost an LSM pays — rewriting data during compaction — that an
+    /// append-only / ART store does not. Returns `(physical_bytes, write_amp)`.
+    pub fn write_amplification(&self) -> (u64, f64) {
+        let stats = self
+            .opts
+            .lock()
+            .ok()
+            .and_then(|opts| opts.get_statistics())
+            .unwrap_or_default();
+        // Lines look like: "rocksdb.flush.write.bytes COUNT : 12345".
+        let ticker = |name: &str| -> u64 {
+            stats
+                .lines()
+                .find(|line| line.trim_start().starts_with(name))
+                .and_then(|line| line.rsplit(':').next())
+                .and_then(|tail| tail.trim().parse().ok())
+                .unwrap_or(0)
+        };
+        let flush = ticker("rocksdb.flush.write.bytes");
+        let compaction = ticker("rocksdb.compact.write.bytes");
+        let physical = flush + compaction;
+        // Relative to the live data finally retained on disk: how many times each
+        // byte of stored data was physically written (flush once, then rewritten
+        // by each compaction). ~1× with no compaction, higher as data cascades
+        // through levels.
+        let live = self.on_disk_bytes().max(1);
+        let amp = physical as f64 / live as f64;
+        (physical, amp)
     }
 
     /// Force a full compaction so on-disk size reflects the merged state.

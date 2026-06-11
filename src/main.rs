@@ -224,9 +224,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 println!(
-                    "resident blocks: {} · bytes_written (on-disk): {}",
+                    "resident blocks: {} · on-disk: {} bytes",
                     report.metrics.resident_blocks, report.metrics.bytes_written
                 );
+                if report.write_amplification > 0.0 {
+                    println!(
+                        "write amplification: {:.2}× ({} physical bytes written{})",
+                        report.write_amplification,
+                        report.physical_bytes_written,
+                        if report.write_amplification <= 1.01 {
+                            ", append-only / write-once"
+                        } else {
+                            ", LSM compaction rewrites"
+                        }
+                    );
+                }
                 if let Some(ms) = report.recovery_ms {
                     println!("recovery (reopen from disk): {:.2} ms", ms);
                 }
@@ -411,6 +423,10 @@ fn bench_rocksdb(
     // Merge to one level so the reported on-disk size reflects the compacted state.
     index.compact();
     report.metrics = index.metrics();
+    // Real LSM write amplification (flush + compaction bytes / user bytes).
+    let (physical, amp) = index.write_amplification();
+    report.physical_bytes_written = physical;
+    report.write_amplification = amp;
     drop(index);
 
     // Recovery: reopen the index from disk and time it.
@@ -440,6 +456,10 @@ fn bench_holt(
     // Checkpoint the WAL so the reported on-disk size reflects all writes.
     index.flush();
     report.metrics = index.metrics();
+    // Holt is append-only (WAL): each record is written once, no compaction
+    // rewrite, so write amplification is ~1× by construction.
+    report.physical_bytes_written = report.metrics.bytes_written;
+    report.write_amplification = 1.0;
     drop(index);
 
     // Recovery: reopen the index from disk (WAL replay) and time it.
