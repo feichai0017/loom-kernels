@@ -24,7 +24,7 @@ pub enum ReplicaStatus {
 
 /// Where a replica's bytes live (Mooncake's `MemoryReplicaData` /
 /// `DiskReplicaData` variant).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReplicaData {
     /// In a mounted RAM segment, at an allocated buffer.
     Memory(AllocatedBuffer),
@@ -54,7 +54,7 @@ impl ReplicaData {
 }
 
 /// One copy of an object (Mooncake's `Replica`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Replica {
     pub id: ReplicaId,
     pub status: ReplicaStatus,

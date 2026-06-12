@@ -510,6 +510,24 @@ impl IdentityScope {
             None
         }
     }
+
+    /// Like [`Self::reuse_violation`] but comparing two scopes directly — the
+    /// identity that wrote a cached object vs. a requester — for the metadata /
+    /// master layer, where objects are keyed by content hash so the same key can
+    /// be requested under a different, unsafe identity.
+    pub fn reuse_violation_against(&self, other: &IdentityScope) -> Option<ReuseViolation> {
+        if self.model_id != other.model_id {
+            Some(ReuseViolation::Model)
+        } else if self.tokenizer_id != other.tokenizer_id {
+            Some(ReuseViolation::Tokenizer)
+        } else if self.adapter_id != other.adapter_id {
+            Some(ReuseViolation::Adapter)
+        } else if self.tenant_id != other.tenant_id {
+            Some(ReuseViolation::Tenant)
+        } else {
+            None
+        }
+    }
 }
 
 /// Why a content-hash-matching KV block is unsafe to reuse across an identity

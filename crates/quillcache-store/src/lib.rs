@@ -39,6 +39,7 @@ pub use transfer::*;
 // MasterService (two-phase Put) and Client are built on these next.
 pub mod allocation_strategy;
 pub mod allocator;
+pub mod master_service;
 pub mod replica;
 pub mod types;
 
@@ -47,6 +48,7 @@ pub use allocation_strategy::{
     RandomAllocationStrategy,
 };
 pub use allocator::{AllocatedBuffer, BufferAllocator, OffsetBufferAllocator};
+pub use master_service::MasterService;
 pub use replica::{Replica, ReplicaData, ReplicaList, ReplicaStatus};
 pub use types::{ErrorCode, ObjectKey, ReplicaId, ReplicateConfig, SegmentName, Slice};
 
