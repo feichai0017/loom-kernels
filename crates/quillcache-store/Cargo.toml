@@ -8,6 +8,7 @@ repository = "https://github.com/feichai0017/quillcache"
 
 [dependencies]
 quillcache-core = { version = "1.0.0-alpha.1", path = "../quillcache-core" }
+quillcache-transfer-engine = { version = "1.0.0-alpha.1", path = "../quillcache-transfer-engine" }
 async-trait = "0.1"
 bytes = "1"
 crc32fast = "1"
