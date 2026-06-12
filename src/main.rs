@@ -1,3 +1,4 @@
+mod cluster;
 mod gateway;
 
 use crate::gateway::run_from_config_path;
@@ -44,6 +45,15 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Run a local multi-node cluster simulation over loopback TCP: a shared
+    /// master + N nodes (each a byte pool + transfer server), a concurrent
+    /// shared-prefix workload, cross-node fetch, and the identity guard.
+    Cluster {
+        #[arg(long, default_value_t = 3)]
+        nodes: usize,
+        #[arg(long, default_value_t = 12)]
+        requests: usize,
+    },
 }
 
 #[tokio::main]
@@ -59,6 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Command::Gateway { config } => run_from_config_path(config).await?,
         Command::Plan => print_plan(),
+        Command::Cluster { nodes, requests } => cluster::run_cluster(nodes, requests).await?,
         Command::BenchIndex {
             backend,
             requests,

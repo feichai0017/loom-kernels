@@ -44,6 +44,7 @@ categories = ["caching", "development-tools"]
 [dependencies]
 clap = { workspace = true }
 axum = { workspace = true }
+bytes = "1"
 futures-util = "0.3"
 reqwest = { workspace = true }
 quillcache-core = { version = "1.0.0-alpha.1", path = "crates/quillcache-core" }

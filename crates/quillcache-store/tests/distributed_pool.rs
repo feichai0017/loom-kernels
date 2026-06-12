@@ -73,8 +73,12 @@ async fn distributed_pool_end_to_end_over_tcp() {
     for (node, addr) in master.nodes() {
         registry = registry.with_node(node.clone(), addr.clone());
     }
-    let pool_a = PooledStore::new(local_a, Arc::new(TcpTransfer), Arc::new(registry));
-    let mut engine_a = EngineConnector::new("node-a", pool_a);
+    let pool_a = PooledStore::new(
+        Arc::new(Mutex::new(local_a)),
+        Arc::new(TcpTransfer),
+        Arc::new(registry),
+    );
+    let engine_a = EngineConnector::new("node-a", pool_a);
 
     // 1) A's engine offloads its own block; reloading it is a local hit.
     let local_block = key("ten-a", "A-only");

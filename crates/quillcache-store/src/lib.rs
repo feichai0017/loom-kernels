@@ -572,16 +572,16 @@ impl NodeRegistry for StaticRegistry {
 /// (node → address). [`Self::get_pooled`] is the pooled-cache read: serve
 /// locally, else fetch from a peer the residency index located, admit it
 /// locally, and return it — Conductor → metadata → Transfer Engine.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PooledStore {
-    local: LocalKvStore,
+    local: Arc<Mutex<LocalKvStore>>,
     transfer: Arc<dyn Transfer>,
     registry: Arc<dyn NodeRegistry>,
 }
 
 impl PooledStore {
     pub fn new(
-        local: LocalKvStore,
+        local: Arc<Mutex<LocalKvStore>>,
         transfer: Arc<dyn Transfer>,
         registry: Arc<dyn NodeRegistry>,
     ) -> Self {
@@ -592,8 +592,10 @@ impl PooledStore {
         }
     }
 
-    pub fn local_mut(&mut self) -> &mut LocalKvStore {
-        &mut self.local
+    /// The shared local byte pool — clone the handle to also serve it to peers
+    /// via [`StoreBlockSource`], so one node both serves and uses one store.
+    pub fn local(&self) -> Arc<Mutex<LocalKvStore>> {
+        self.local.clone()
     }
 
     /// Pooled read. `located_nodes` are the node ids the residency index says
@@ -603,11 +605,16 @@ impl PooledStore {
     /// return. A local cross-identity match is refused before any fetch — the
     /// identity guard wins over a network round trip.
     pub async fn get_pooled(
-        &mut self,
+        &self,
         key: &KvBlockKey,
         located_nodes: &[String],
     ) -> Result<Bytes, StoreError> {
-        match self.local.get(key) {
+        // Serve locally first — release the lock before any `.await`.
+        let local = {
+            let mut guard = self.local.lock().unwrap();
+            guard.get(key)
+        };
+        match local {
             Ok(bytes) => return Ok(bytes),
             Err(StoreError::NotFound) => {}
             Err(other) => return Err(other),
@@ -623,7 +630,7 @@ impl PooledStore {
             // just falls through to the next located node.
             if let Ok(bytes) = self.transfer.read(&addr, key).await {
                 // Keyed by the exact identity-bearing key, so safe to admit.
-                let _ = self.local.put(key.clone(), bytes.clone());
+                let _ = self.local.lock().unwrap().put(key.clone(), bytes.clone());
                 return Ok(bytes);
             }
         }
@@ -642,7 +649,7 @@ impl PooledStore {
 /// block in the local pool and returns the residency to report to the master;
 /// `reload` serves a block from the pool — local first, else fetched from the
 /// peer node the residency index located — identity-guarded.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EngineConnector {
     pool: PooledStore,
     node_id: String,
@@ -663,9 +670,9 @@ impl EngineConnector {
     /// The engine computed a block's KV; offload its bytes into the local pool.
     /// Returns the [`CacheResidency`] to report to the master so peers can find
     /// it (the block lives in this node's DRAM tier of the pool).
-    pub fn offload(&mut self, key: KvBlockKey, bytes: Bytes) -> std::io::Result<CacheResidency> {
+    pub fn offload(&self, key: KvBlockKey, bytes: Bytes) -> std::io::Result<CacheResidency> {
         let len = bytes.len() as u64;
-        self.pool.local_mut().put(key.clone(), bytes)?;
+        self.pool.local().lock().unwrap().put(key.clone(), bytes)?;
         Ok(CacheResidency {
             key,
             worker_id: self.node_id.clone(),
@@ -681,15 +688,16 @@ impl EngineConnector {
     /// fetch from one of `located_nodes` (from the master's residency index) over
     /// the transfer engine, and admit it locally. Identity-guarded.
     pub async fn reload(
-        &mut self,
+        &self,
         key: &KvBlockKey,
         located_nodes: &[String],
     ) -> Result<Bytes, StoreError> {
         self.pool.get_pooled(key, located_nodes).await
     }
 
-    pub fn pool_mut(&mut self) -> &mut PooledStore {
-        &mut self.pool
+    /// The node's shared byte pool, to serve to peers via [`StoreBlockSource`].
+    pub fn store(&self) -> Arc<Mutex<LocalKvStore>> {
+        self.pool.local()
     }
 }
 
@@ -1376,7 +1384,11 @@ mod tests {
         let dir_a = tmp("pool-a");
         let local_a = LocalKvStore::new(&dir_a, 1 << 20, 1 << 20).unwrap();
         let registry = Arc::new(StaticRegistry::new("node-a").with_node("node-b", addr_b.clone()));
-        let mut node_a = PooledStore::new(local_a, Arc::new(TcpTransfer), registry);
+        let node_a = PooledStore::new(
+            Arc::new(Mutex::new(local_a)),
+            Arc::new(TcpTransfer),
+            registry,
+        );
 
         // The residency index located the block on node-a (us — skipped) and
         // node-b; node-a resolves node-b's address and fetches it over TCP.
