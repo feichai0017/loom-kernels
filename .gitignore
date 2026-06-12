@@ -26,3 +26,8 @@ GEMINI.md
 __pycache__/
 *.pyc
 .venv/
+
+# Astro docs site (web/)
+web/node_modules/
+web/dist/
+web/.astro/

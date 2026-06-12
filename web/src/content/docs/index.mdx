@@ -1,0 +1,119 @@
+---
+title: QuillCache
+description: A Mooncake/Dynamo-style distributed KV cache pool and control plane for LLM serving, in Rust — with identity-governed safe reuse and a crash-consistent persistent tier.
+template: splash
+hero:
+  tagline: A Mooncake/Dynamo-style distributed KV cache pool and control plane for LLM serving — in Rust, with identity-governed safe reuse and a crash-consistent persistent tier.
+  actions:
+    - text: Read the docs
+      link: /overview/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/feichai0017/quillcache
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+import ArchDiagram from "../../components/ArchDiagram.astro";
+
+<div class="qc-pills">
+  <span class="qc-pill">distributed KV byte pool</span>
+  <span class="qc-pill">DRAM / SSD tiers</span>
+  <span class="qc-pill">transfer engine · TCP / RDMA</span>
+  <span class="qc-pill">cross-node fetch</span>
+  <span class="qc-pill">identity-safe reuse</span>
+  <span class="qc-pill">crash-consistent SSD</span>
+  <span class="qc-pill">persistent ART index</span>
+  <span class="qc-pill">Dynamo cost router</span>
+  <span class="qc-pill">9 crates · MIT</span>
+</div>
+
+QuillCache sits beside real inference engines (vLLM, SGLang) and owns the KV
+cache as a resource — the byte pool, the transfer engine, the residency index,
+and the cache-aware control plane. It replicates the architecture of **NVIDIA
+Dynamo** and **Moonshot's Mooncake**, at a size one person can read end-to-end
+and measure. It does **not** run models — the CUDA tier moves and quantizes KV
+*bytes* (the data path), not inference compute.
+
+## Headline results
+
+Real code, no simulation — every number is measured against in-tree baselines.
+45 tests pass; `fmt` + `clippy` clean.
+
+<div class="qc-statgrid">
+  <div class="qc-stat">
+    <div class="n">9.96 µs</div>
+    <div class="k">ART prefix-scan (p50)</div>
+    <div class="d">Holt (persistent ART) residency index vs RocksDB/LSM 16.8 µs and an O(N) flat map (494 µs). Recovery 2.6 ms.</div>
+  </div>
+  <div class="qc-stat">
+    <div class="n">1× vs 10.6×</div>
+    <div class="k">Write amplification</div>
+    <div class="d">ART writes each record once; LSM rewrites through compaction. Measured from RocksDB's own stats, not assumed.</div>
+  </div>
+  <div class="qc-stat">
+    <div class="n">96.8%</div>
+    <div class="k">Unsafe reuse caught</div>
+    <div class="d">Of a naive content-hash cache's hits on a collision workload — cross-tenant leaks + cross-adapter/model errors. The guard serves 0.</div>
+  </div>
+  <div class="qc-stat">
+    <div class="n">crash-consistent</div>
+    <div class="k">Persistent SSD tier</div>
+    <div class="d">Object-first atomic publish + WAL: complete blocks recover, half-written / corrupted blocks dropped, no dangling pointers.</div>
+  </div>
+  <div class="qc-stat">
+    <div class="n">real KV bytes</div>
+    <div class="k">Distributed byte pool</div>
+    <div class="d">DRAM + SSD tiers that hold actual KV blocks, with index-located cross-node fetch over the transfer engine — verified over TCP.</div>
+  </div>
+  <div class="qc-stat">
+    <div class="n">1.7%</div>
+    <div class="k">Cost of safety</div>
+    <div class="d">Identity-guard overhead on a realistic, mostly-same-identity workload (47.8% only on the adversarial all-collision case).</div>
+  </div>
+</div>
+
+## Where it sits
+
+The engines run the model and own the live HBM KV; QuillCache holds the
+offloaded KV bytes (DRAM / SSD), moves them between nodes, indexes where they
+live, and decides routing and reuse.
+
+<ArchDiagram />
+
+## Explore
+
+<CardGrid>
+  <LinkCard
+    title="Overview"
+    href="/overview/"
+    description="What it is, what's wired online vs a tested unit vs reserved."
+  />
+  <LinkCard
+    title="Architecture"
+    href="/architecture/"
+    description="Gateway, control plane, KV cache pool, distribution — how a request flows."
+  />
+  <LinkCard
+    title="ART vs LSM storage study"
+    href="/storage-study/"
+    description="Which storage engine fits a residency index — prefix-scan, write-amp, recovery."
+  />
+  <LinkCard
+    title="Identity-safe reuse"
+    href="/identity-safe-reuse/"
+    description="Why content-hash caches leak, and the guard that costs ~1.7%."
+  />
+  <LinkCard
+    title="Crash-consistent tier"
+    href="/crash-consistency/"
+    description="Object-first atomic publish + WAL recovery, proven by test."
+  />
+  <LinkCard
+    title="Mooncake / Dynamo mapping"
+    href="/reference-mapping/"
+    description="Every reference-design component, mapped to a crate."
+  />
+</CardGrid>

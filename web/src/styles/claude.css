@@ -1,0 +1,171 @@
+/* Claude-style theme for Starlight — warm paper, coral accent, serif display. */
+
+:root {
+  --sl-font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --sl-font-mono: "SF Mono", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  --qc-serif: "Fraunces", Georgia, "Times New Roman", serif;
+  --qc-radius: 14px;
+  --qc-coral: #d97757;
+  --qc-coral-ink: #c2410c;
+}
+
+/* ---- Dark theme (Claude warm charcoal) — Starlight's default :root ---- */
+:root {
+  --sl-color-accent-low: #43210f;
+  --sl-color-accent: #d97757;
+  --sl-color-accent-high: #f2c9b8;
+  --sl-color-white: #f6f4ee;
+  --sl-color-gray-1: #e9e5dc;
+  --sl-color-gray-2: #cdc8bc;
+  --sl-color-gray-3: #9d978a;
+  --sl-color-gray-4: #6f6a5f;
+  --sl-color-gray-5: #48453f;
+  --sl-color-gray-6: #312f2b;
+  --sl-color-gray-7: #26241f;
+  --sl-color-black: #1c1b19;
+  --sl-color-bg: #1c1b19;
+  --sl-color-bg-nav: #1c1b19;
+  --sl-color-bg-sidebar: #211f1c;
+  --sl-color-bg-inline-code: #2b2925;
+  --sl-color-hairline: #34322d;
+  --sl-color-hairline-light: #2b2925;
+  --sl-color-text-accent: #e8a187;
+}
+
+/* ---- Light theme (Claude cream) ---- */
+:root[data-theme="light"] {
+  --sl-color-accent-low: #f6e2d8;
+  --sl-color-accent: #c2410c;
+  --sl-color-accent-high: #7c2d12;
+  --sl-color-white: #1f1e1c;
+  --sl-color-gray-1: #2b2a26;
+  --sl-color-gray-2: #44423b;
+  --sl-color-gray-3: #6b6960;
+  --sl-color-gray-4: #918d81;
+  --sl-color-gray-5: #c3bdaf;
+  --sl-color-gray-6: #e4e0d4;
+  --sl-color-gray-7: #f1eee5;
+  --sl-color-black: #faf9f5;
+  --sl-color-bg: #faf9f5;
+  --sl-color-bg-nav: #faf9f5;
+  --sl-color-bg-sidebar: #f2f0e8;
+  --sl-color-bg-inline-code: #ece8dd;
+  --sl-color-hairline: #e4e0d4;
+  --sl-color-hairline-light: #ece8de;
+  --sl-color-text-accent: #c2410c;
+}
+
+/* ---- Serif display, Claude-style ---- */
+.site-title,
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.hero h1,
+.hero .tagline {
+  font-family: var(--qc-serif);
+  letter-spacing: -0.012em;
+  font-weight: 500;
+}
+.sl-markdown-content h1 {
+  font-weight: 500;
+  font-size: 2.1rem;
+}
+
+/* ---- Soften the UI ---- */
+.sl-markdown-content :is(table, pre, .expressive-code) {
+  border-radius: var(--qc-radius);
+  overflow: hidden;
+}
+.card,
+.sl-link-card,
+starlight-card {
+  border-radius: var(--qc-radius) !important;
+}
+.sl-markdown-content :is(th, td) {
+  border-color: var(--sl-color-hairline);
+}
+
+/* ---- Hero (landing) ---- */
+.hero {
+  padding-block: 1.5rem 0.5rem;
+}
+.hero h1 {
+  font-size: clamp(2.6rem, 6vw, 4rem);
+  line-height: 1.04;
+}
+.hero .tagline {
+  font-family: var(--sl-font);
+  font-size: 1.15rem;
+  color: var(--sl-color-gray-2);
+  max-width: 44ch;
+}
+/* Primary CTA in coral */
+.hero .actions a[data-variant="primary"] {
+  background: var(--qc-coral);
+  border-color: var(--qc-coral);
+  color: #1c1b19;
+}
+.hero .actions a[data-variant="primary"]:hover {
+  background: #e2876a;
+  border-color: #e2876a;
+}
+
+/* ---- Landing helpers ---- */
+.qc-statgrid {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(3, 1fr);
+  margin: 1.5rem 0;
+}
+@media (max-width: 56rem) {
+  .qc-statgrid {
+    grid-template-columns: 1fr;
+  }
+}
+.qc-stat {
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: var(--qc-radius);
+  background: var(--sl-color-bg-sidebar);
+  padding: 1rem 1.1rem;
+}
+.qc-stat .n {
+  font-family: var(--sl-font-mono);
+  font-size: 1.6rem;
+  font-weight: 600;
+  color: var(--sl-color-text-accent);
+  letter-spacing: -0.02em;
+}
+.qc-stat .k {
+  font-weight: 600;
+  margin: 0.35rem 0 0.15rem;
+}
+.qc-stat .d {
+  font-size: 0.9rem;
+  color: var(--sl-color-gray-3);
+  line-height: 1.5;
+}
+.qc-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 1.2rem 0;
+}
+.qc-pill {
+  font-family: var(--sl-font-mono);
+  font-size: 0.78rem;
+  color: var(--sl-color-gray-2);
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: 8px;
+  padding: 0.3rem 0.55rem;
+  background: var(--sl-color-bg-sidebar);
+}
+.qc-diagram {
+  border: 1px solid var(--sl-color-hairline);
+  border-radius: var(--qc-radius);
+  background: var(--sl-color-bg-sidebar);
+  padding: 0.6rem;
+  margin: 1.2rem 0;
+}
+.qc-diagram svg {
+  width: 100%;
+  height: auto;
+}

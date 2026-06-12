@@ -1,0 +1,57 @@
+---
+// Theme-aware architecture diagram (uses Starlight CSS variables, so it adapts
+// to light/dark automatically). Layered: gateway -> control -> pool -> distribution.
+---
+
+<div class="qc-diagram">
+  <svg viewBox="0 0 720 372" role="img" aria-label="QuillCache layered architecture: gateway, control plane, KV cache pool, distribution, with external engines and a CUDA device tier" xmlns="http://www.w3.org/2000/svg" style="font-family: var(--sl-font);">
+    <style>
+      .qc-l { fill: var(--sl-color-bg); stroke: var(--sl-color-hairline); stroke-width: 1; }
+      .qc-stripe { fill: var(--qc-coral); }
+      .qc-t { fill: var(--sl-color-white); font-size: 15px; font-weight: 600; }
+      .qc-s { fill: var(--sl-color-gray-3); font-size: 12px; }
+      .qc-chip { fill: var(--sl-color-bg-sidebar); stroke: var(--sl-color-hairline); stroke-width: 1; }
+      .qc-ct { fill: var(--sl-color-gray-2); font-size: 13px; font-weight: 600; }
+      .qc-cs { fill: var(--sl-color-gray-4); font-size: 11px; }
+      .qc-arrow { stroke: var(--sl-color-gray-4); stroke-width: 1.4; }
+    </style>
+
+    <!-- gateway -->
+    <rect class="qc-l" x="12" y="14" width="696" height="56" rx="12"></rect>
+    <rect class="qc-stripe" x="12" y="14" width="5" height="56" rx="2.5"></rect>
+    <text class="qc-t" x="32" y="39">Gateway</text>
+    <text class="qc-s" x="32" y="58">OpenAI-compatible proxy · streaming · decision headers · SLO goodput</text>
+
+    <!-- control plane -->
+    <rect class="qc-l" x="12" y="84" width="696" height="56" rx="12"></rect>
+    <rect class="qc-stripe" x="12" y="84" width="5" height="56" rx="2.5"></rect>
+    <text class="qc-t" x="32" y="109">Control plane / Conductor</text>
+    <text class="qc-s" x="32" y="128">router (Dynamo cost fn) · identity guard · residency index (Holt ART / RocksDB / Memory)</text>
+
+    <!-- kv cache pool -->
+    <rect class="qc-l" x="12" y="154" width="696" height="56" rx="12"></rect>
+    <rect class="qc-stripe" x="12" y="154" width="5" height="56" rx="2.5"></rect>
+    <text class="qc-t" x="32" y="179">KV cache pool / data plane</text>
+    <text class="qc-s" x="32" y="198">StoreDataPlane: HBM/DRAM/SSD tiers (real bytes) · LocalKvStore: WAL crash-consistent SSD</text>
+
+    <!-- distribution -->
+    <rect class="qc-l" x="12" y="224" width="696" height="56" rx="12"></rect>
+    <rect class="qc-stripe" x="12" y="224" width="5" height="56" rx="2.5"></rect>
+    <text class="qc-t" x="32" y="249">Distribution</text>
+    <text class="qc-s" x="32" y="268">PooledStore: cross-node fetch · NodeRegistry (etcd analogue) · Transfer: TCP / RDMA (reserved)</text>
+
+    <!-- connectors -->
+    <line class="qc-arrow" x1="360" y1="70" x2="360" y2="84"></line>
+    <line class="qc-arrow" x1="360" y1="140" x2="360" y2="154"></line>
+    <line class="qc-arrow" x1="360" y1="210" x2="360" y2="224"></line>
+
+    <!-- external chips -->
+    <rect class="qc-chip" x="12" y="300" width="340" height="58" rx="12"></rect>
+    <text class="qc-ct" x="30" y="326">Engines (external)</text>
+    <text class="qc-cs" x="30" y="345">vLLM / SGLang — run the model, own live HBM KV</text>
+
+    <rect class="qc-chip" x="368" y="300" width="340" height="58" rx="12"></rect>
+    <text class="qc-ct" x="386" y="326">CUDA device tier</text>
+    <text class="qc-cs" x="386" y="345">HBM↔host copies · FP8 quantize (feature-gated)</text>
+  </svg>
+</div>
