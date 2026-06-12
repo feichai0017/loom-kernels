@@ -1054,6 +1054,7 @@ dependencies = [
  "bytes",
  "crc32fast",
  "quillcache-core",
+ "quillcache-transfer-engine",
  "serde",
  "serde_json",
  "thiserror",
