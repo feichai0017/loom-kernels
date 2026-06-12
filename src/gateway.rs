@@ -5,12 +5,12 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::StreamExt;
-use quillcache_control::{ControlPlane, IngestSummary, PlanAction, RequestPlan, ServingMode};
+use quillcache_core::{ControlPlane, IngestSummary, PlanAction, RequestPlan, ServingMode};
 use quillcache_core::{
     DataPlane, DataPlaneAction, EngineEndpoint, ExternalKvBlockKey, IndexBackend, KvBlockKey,
     KvEventBatch, MemoryIndex, NoDataPlane, RequestKvHints, RequestShape, SloTarget,
 };
-use quillcache_router::{
+use quillcache_core::{
     DynamoCostRouter, GreedyStatePlaneRouter, LeastLoadedRouter, PrefixAffinityRouter,
     RoundRobinRouter, RoutingPolicy, SessionAffinityRouter, SloAwareRouter,
 };
@@ -992,7 +992,7 @@ enum GatewayHttpError {
     #[error("invalid JSON request body: {0}")]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
-    Control(#[from] quillcache_control::ControlError),
+    Control(#[from] quillcache_core::ControlError),
     #[error("routed to unknown engine: {0}")]
     MissingEngine(String),
     #[error("upstream request failed: {0}")]

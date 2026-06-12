@@ -15,7 +15,7 @@
 //! here; the cross-node read path is then Conductor → `locate` → registry addr →
 //! transfer engine (see `quillcache_store::PooledStore` / `EngineConnector`).
 
-use quillcache_core::{CacheResidency, IndexBackend, KvBlockKey, MemoryIndex};
+use crate::{CacheResidency, IndexBackend, KvBlockKey, MemoryIndex};
 use std::collections::HashMap;
 
 /// The master: a shared residency index plus a node registry.
@@ -83,7 +83,7 @@ impl Master {
 
     /// A node reports a block was evicted from its pool.
     pub fn evicted(&mut self, node_id: &str, key: &KvBlockKey) {
-        let scope = quillcache_core::IdentityScope::from_key(key);
+        let scope = crate::IdentityScope::from_key(key);
         self.index.remove_block(&scope, node_id, &key.block_hash);
     }
 
@@ -119,7 +119,7 @@ impl Default for Master {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quillcache_core::{CacheResidency, KvBlockKey};
+    use crate::{CacheResidency, KvBlockKey};
 
     fn key(tenant: &str, hash: &str) -> KvBlockKey {
         KvBlockKey::new("m", "t", tenant, "p", hash, 0, 64)
@@ -137,7 +137,7 @@ mod tests {
         master.placed(CacheResidency {
             key: k.clone(),
             worker_id: "node-b".into(),
-            tier: quillcache_core::CacheTier::CpuDram,
+            tier: crate::CacheTier::CpuDram,
             bytes: 16,
             last_access_ms: 0,
             ref_count: 0,
@@ -153,7 +153,7 @@ mod tests {
         master.placed(CacheResidency {
             key: k.clone(),
             worker_id: "node-b".into(),
-            tier: quillcache_core::CacheTier::CpuDram,
+            tier: crate::CacheTier::CpuDram,
             bytes: 16,
             last_access_ms: 0,
             ref_count: 0,

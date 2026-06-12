@@ -1,25 +1,15 @@
 [workspace]
 members = [
     ".",
-    "crates/quillcache-control",
     "crates/quillcache-core",
-    "crates/quillcache-gateway",
-    "crates/quillcache-router",
     "crates/quillcache-store",
-    "crates/quillcache-master",
-    "crates/quillcache-transfer",
     "crates/quillcache-index-rocksdb",
     "crates/quillcache-index-holt",
 ]
 default-members = [
     ".",
-    "crates/quillcache-control",
     "crates/quillcache-core",
-    "crates/quillcache-gateway",
-    "crates/quillcache-router",
     "crates/quillcache-store",
-    "crates/quillcache-master",
-    "crates/quillcache-transfer",
     "crates/quillcache-index-holt",
 ]
 # The CUDA device tier is excluded so the default build never resolves/compiles
@@ -53,20 +43,26 @@ categories = ["caching", "development-tools"]
 
 [dependencies]
 clap = { workspace = true }
+axum = { workspace = true }
+futures-util = "0.3"
+reqwest = { workspace = true }
 quillcache-core = { version = "1.0.0-alpha.1", path = "crates/quillcache-core" }
-quillcache-gateway = { version = "1.0.0-alpha.1", path = "crates/quillcache-gateway" }
-quillcache-router = { version = "1.0.0-alpha.1", path = "crates/quillcache-router" }
+quillcache-store = { version = "1.0.0-alpha.1", path = "crates/quillcache-store" }
 quillcache-index-rocksdb = { version = "1.0.0-alpha.1", path = "crates/quillcache-index-rocksdb", optional = true }
 quillcache-index-holt = { version = "1.0.0-alpha.1", path = "crates/quillcache-index-holt", optional = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [features]
 # Optional RocksDB (LSM) index backend. Off by default so `cargo install
 # quillcache` stays light and the core CI job needs no C++/libclang toolchain.
-rocksdb = ["dep:quillcache-index-rocksdb", "quillcache-gateway/rocksdb"]
+rocksdb = ["dep:quillcache-index-rocksdb"]
 # Optional Holt (persistent ART) index backend. Pure Rust; off by default to keep
 # the installed binary minimal. Also lets the online gateway back its residency
 # index with Holt (`index: holt` in the gateway config).
-holt = ["dep:quillcache-index-holt", "quillcache-gateway/holt"]
+holt = ["dep:quillcache-index-holt"]

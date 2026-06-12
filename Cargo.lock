@@ -1019,47 +1019,12 @@ dependencies = [
 name = "quillcache"
 version = "1.0.0-alpha.1"
 dependencies = [
- "clap",
- "quillcache-core",
- "quillcache-gateway",
- "quillcache-index-holt",
- "quillcache-index-rocksdb",
- "quillcache-router",
- "serde_json",
- "tokio",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "quillcache-control"
-version = "1.0.0-alpha.1"
-dependencies = [
- "quillcache-core",
- "quillcache-router",
- "quillcache-store",
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "quillcache-core"
-version = "1.0.0-alpha.1"
-dependencies = [
- "serde",
- "thiserror",
-]
-
-[[package]]
-name = "quillcache-gateway"
-version = "1.0.0-alpha.1"
-dependencies = [
  "axum",
+ "clap",
  "futures-util",
- "quillcache-control",
  "quillcache-core",
  "quillcache-index-holt",
  "quillcache-index-rocksdb",
- "quillcache-router",
  "quillcache-store",
  "reqwest",
  "serde",
@@ -1068,6 +1033,15 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "quillcache-core"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
@@ -1090,46 +1064,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "quillcache-master"
-version = "1.0.0-alpha.1"
-dependencies = [
- "bytes",
- "quillcache-core",
- "quillcache-store",
- "quillcache-transfer",
- "tokio",
-]
-
-[[package]]
-name = "quillcache-router"
-version = "1.0.0-alpha.1"
-dependencies = [
- "quillcache-core",
- "serde",
- "thiserror",
-]
-
-[[package]]
 name = "quillcache-store"
-version = "1.0.0-alpha.1"
-dependencies = [
- "bytes",
- "crc32fast",
- "quillcache-core",
- "quillcache-transfer",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "quillcache-transfer"
 version = "1.0.0-alpha.1"
 dependencies = [
  "async-trait",
  "bytes",
+ "crc32fast",
  "quillcache-core",
+ "serde",
  "serde_json",
  "thiserror",
  "tokio",

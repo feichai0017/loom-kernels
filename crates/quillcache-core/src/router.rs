@@ -1,6 +1,4 @@
-use quillcache_core::{
-    CacheResidency, CacheTier, CostModel, KvBlockKey, RequestShape, WorkerState,
-};
+use crate::{CacheResidency, CacheTier, CostModel, KvBlockKey, RequestShape, WorkerState};
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
@@ -729,7 +727,7 @@ fn softmax_sample(costs: &[f64], temperature: f64, seed_key: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quillcache_core::{CacheResidency, KvBlockKey, SloTarget};
+    use crate::{CacheResidency, KvBlockKey, SloTarget};
 
     fn request_with_shared_block() -> RequestShape {
         let block = KvBlockKey::new("llama", "tok", "tenant-a", "p0", "shared", 0, 128);

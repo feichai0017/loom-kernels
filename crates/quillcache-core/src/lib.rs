@@ -4,6 +4,13 @@ use std::fmt;
 use std::str::FromStr;
 
 pub mod bench;
+pub mod control;
+pub mod master;
+pub mod router;
+
+pub use control::*;
+pub use master::*;
+pub use router::*;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct KvBlockKey {

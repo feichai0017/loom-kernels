@@ -1,7 +1,9 @@
+mod gateway;
+
+use crate::gateway::run_from_config_path;
 use clap::{Parser, Subcommand};
 use quillcache_core::bench::{bench_index, IndexBenchConfig};
 use quillcache_core::MemoryIndex;
-use quillcache_gateway::run_from_config_path;
 
 #[derive(Debug, Parser)]
 #[command(name = "quillcache")]

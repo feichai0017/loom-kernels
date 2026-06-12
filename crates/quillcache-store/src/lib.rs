@@ -5,7 +5,7 @@
 //!   [`LocalKvStore`] (the real byte pool on one node) plus [`PooledStore`]
 //!   (local-first, else fetch a block from a peer node over the transfer engine).
 //! - **Mooncake Transfer Engine** = the data path. We depend on
-//!   `quillcache_transfer::Transfer` (TCP today, RDMA reserved) and serve our
+//!   `crate::transfer::Transfer` (TCP today, RDMA reserved) and serve our
 //!   blocks to peers via [`StoreBlockSource`].
 //! - **NVIDIA Dynamo KVBM** = the tiered block manager (G1 HBM / G2 host / G3
 //!   disk). Here that is [`StoreDataPlane`]: it implements the control plane's
@@ -22,13 +22,16 @@ use quillcache_core::{
     CacheResidency, CacheTier, CostModel, DataPlane, DataPlaneAction, DataPlaneActionKind,
     DataPlaneMetrics, DataPlaneUpdate, IdentityScope, KvBlockKey, ReuseViolation,
 };
-use quillcache_transfer::{BlockSource, Transfer};
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+pub mod transfer;
+pub use transfer::*;
 
 // =====================================================================
 // LocalKvStore — the real KV byte pool (DRAM + SSD), identity-guarded.
@@ -1162,7 +1165,7 @@ impl DataPlane for StoreDataPlane {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quillcache_transfer::{serve_listener, TcpTransfer};
+    use crate::transfer::{serve_listener, TcpTransfer};
     use tokio::net::TcpListener;
 
     fn tmp(name: &str) -> PathBuf {

@@ -11,12 +11,12 @@
 //! `EngineConnector` here is the in-process stand-in).
 
 use bytes::Bytes;
+use quillcache_core::Master;
 use quillcache_core::{CacheResidency, CacheTier, KvBlockKey};
-use quillcache_master::Master;
+use quillcache_store::{serve_listener, TcpTransfer};
 use quillcache_store::{
     EngineConnector, LocalKvStore, PooledStore, StaticRegistry, StoreBlockSource, StoreError,
 };
-use quillcache_transfer::{serve_listener, TcpTransfer};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 
