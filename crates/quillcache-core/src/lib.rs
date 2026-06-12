@@ -602,6 +602,21 @@ pub trait IndexBackend: std::fmt::Debug + Send + Sync {
     /// slice of residency.
     fn snapshot(&self) -> Vec<CacheResidency>;
 
+    /// Every residency whose block carries this content `block_hash`, across
+    /// *all* identity scopes. The inline reuse guard uses it to find
+    /// content-matching blocks that may belong to a **different** identity
+    /// (the safety check). The default scans a snapshot — correct but O(N); the
+    /// in-memory backend overrides it with a content-hash reverse index so the
+    /// online guard is an O(matches) seek rather than a full index dump per
+    /// request. Persistent backends can override similarly via their secondary
+    /// namespace.
+    fn residency_by_content_hash(&self, block_hash: &str) -> Vec<CacheResidency> {
+        self.snapshot()
+            .into_iter()
+            .filter(|residency| residency.key.block_hash == block_hash)
+            .collect()
+    }
+
     /// Number of residency records currently held.
     fn len(&self) -> usize;
 
@@ -643,6 +658,11 @@ pub struct MemoryIndex {
     /// index turns eviction into an O(matches) lookup. This mirrors the
     /// secondary-namespace reverse index the persistent backends keep on disk.
     by_hash: HashMap<(IdentityScope, String), HashSet<KvBlockKey>>,
+    /// Content-hash reverse index: `block_hash -> the set of full keys carrying
+    /// that content hash, across *all* identities`. The inline reuse guard
+    /// (`residency_by_content_hash`) needs cross-identity content matches; this
+    /// makes that an O(matches) seek instead of a full snapshot scan per request.
+    by_content_hash: HashMap<String, HashSet<KvBlockKey>>,
     puts: u64,
     removes: u64,
 }
@@ -650,6 +670,16 @@ pub struct MemoryIndex {
 impl MemoryIndex {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Drop a fully-evicted key from the content-hash reverse index.
+    fn forget_content_hash(&mut self, key: &KvBlockKey) {
+        if let Some(set) = self.by_content_hash.get_mut(&key.block_hash) {
+            set.remove(key);
+            if set.is_empty() {
+                self.by_content_hash.remove(&key.block_hash);
+            }
+        }
     }
 }
 
@@ -667,6 +697,10 @@ impl IndexBackend for MemoryIndex {
         entries.push(residency);
         self.by_hash
             .entry((IdentityScope::from_key(&key), key.block_hash.clone()))
+            .or_default()
+            .insert(key.clone());
+        self.by_content_hash
+            .entry(key.block_hash.clone())
             .or_default()
             .insert(key);
         self.puts += 1;
@@ -713,6 +747,9 @@ impl IndexBackend for MemoryIndex {
                     self.by_hash.remove(&map_key);
                 }
             }
+            for key in &emptied {
+                self.forget_content_hash(key);
+            }
         }
         self.removes += removed as u64;
         removed
@@ -737,17 +774,31 @@ impl IndexBackend for MemoryIndex {
                     self.by_hash.remove(&map_key);
                 }
             }
+            self.forget_content_hash(&key);
         }
     }
 
     fn clear(&mut self) {
         self.entries.clear();
         self.by_hash.clear();
+        self.by_content_hash.clear();
     }
 
     fn snapshot(&self) -> Vec<CacheResidency> {
         self.entries
             .values()
+            .flat_map(|entries| entries.iter().cloned())
+            .collect()
+    }
+
+    fn residency_by_content_hash(&self, block_hash: &str) -> Vec<CacheResidency> {
+        // O(matches): seek the keys carrying this content hash, then their
+        // residency — no full-index scan on the online reuse-guard path.
+        let Some(keys) = self.by_content_hash.get(block_hash) else {
+            return Vec::new();
+        };
+        keys.iter()
+            .filter_map(|key| self.entries.get(key))
             .flat_map(|entries| entries.iter().cloned())
             .collect()
     }
@@ -1638,5 +1689,35 @@ mod tests {
         idx.clear_worker("w0");
         assert!(idx.prefix_scan(&mem_scope(), "root").is_empty());
         assert_eq!(idx.remove_block(&mem_scope(), "w0", "b0"), 0);
+    }
+
+    #[test]
+    fn residency_by_content_hash_finds_cross_identity_and_stays_consistent() {
+        let mut idx = MemoryIndex::new();
+        // Same content hash "b0" under two different keys (different prefix
+        // position) plus a copy on a second worker -> three residency records,
+        // all of which the content-hash seek must surface (this is what the
+        // online reuse guard relies on to spot cross-identity matches).
+        idx.put(CacheResidency::hbm("w0", mem_block("root", "b0", 0), 1024));
+        idx.put(CacheResidency::hbm("w1", mem_block("root", "b0", 0), 1024));
+        idx.put(CacheResidency::hbm("w0", mem_block("other", "b0", 5), 1024));
+        idx.put(CacheResidency::hbm("w0", mem_block("root", "b1", 1), 1024));
+
+        assert_eq!(idx.residency_by_content_hash("b0").len(), 3);
+        assert_eq!(idx.residency_by_content_hash("b1").len(), 1);
+        assert!(idx.residency_by_content_hash("absent").is_empty());
+
+        // Removing one worker's copy of one key leaves the others findable.
+        assert_eq!(idx.remove_block(&mem_scope(), "w0", "b0"), 2); // both "b0" keys on w0
+        assert_eq!(idx.residency_by_content_hash("b0").len(), 1); // w1's copy remains
+        idx.clear_worker("w1");
+        assert!(idx.residency_by_content_hash("b0").is_empty()); // bucket pruned
+                                                                 // The override agrees with the default snapshot-scan implementation.
+        let by_scan: Vec<_> = idx
+            .snapshot()
+            .into_iter()
+            .filter(|r| r.key.block_hash == "b1")
+            .collect();
+        assert_eq!(idx.residency_by_content_hash("b1").len(), by_scan.len());
     }
 }

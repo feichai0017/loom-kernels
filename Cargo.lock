@@ -1043,6 +1043,7 @@ name = "quillcache-gateway"
 version = "1.0.0-alpha.1"
 dependencies = [
  "axum",
+ "futures-util",
  "quillcache-control",
  "quillcache-core",
  "quillcache-index-holt",

@@ -1,0 +1,14 @@
+# Local gateway for the self-overhead benchmark (bench/bench_gateway.py).
+# Points at tools/mock_engine.py (a near-instant OpenAI-compatible engine) so the
+# only latency the client sees through this gateway is QuillCache's own hot-path
+# cost. Uses the Dynamo-style KV-router cost function.
+bind: 127.0.0.1:8080
+policy: dynamo-cost
+engines:
+  - id: mock-a
+    kind: Mock
+    base_url: http://127.0.0.1:9000
+    model_id: mock
+    tokenizer_id: mock
+    tenant_id: default
+    locality_domain: local

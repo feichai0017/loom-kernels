@@ -12,8 +12,8 @@ use quillcache_core::{
     TieredDataPlane, TieredDataPlaneConfig,
 };
 use quillcache_router::{
-    GreedyStatePlaneRouter, LeastLoadedRouter, PrefixAffinityRouter, RoundRobinRouter,
-    RoutingPolicy, SessionAffinityRouter, SloAwareRouter,
+    DynamoCostRouter, GreedyStatePlaneRouter, LeastLoadedRouter, PrefixAffinityRouter,
+    RoundRobinRouter, RoutingPolicy, SessionAffinityRouter, SloAwareRouter,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -61,7 +61,8 @@ pub struct GatewayConfig {
     pub engines: Vec<EngineEndpoint>,
     /// Routing policy: "prefix-affinity" (cache-affine across the fleet),
     /// "round-robin" (spread baseline), "least-loaded", "slo-aware" (SLO as a
-    /// near-hard constraint), "session-affinity", or "greedy" (default).
+    /// near-hard constraint), "session-affinity", "dynamo-cost" (mirrors NVIDIA
+    /// Dynamo's KV-router cost function), or "greedy" (default).
     #[serde(default)]
     pub policy: Option<String>,
     /// Residency index backend: "memory" (default, ephemeral), "holt"
@@ -529,6 +530,7 @@ fn build_policy(name: Option<&str>) -> Box<dyn RoutingPolicy> {
         "least-loaded" | "load" => Box::new(LeastLoadedRouter::default()),
         "slo-aware" | "slo" => Box::new(SloAwareRouter::default()),
         "session-affinity" | "session" => Box::new(SessionAffinityRouter::default()),
+        "dynamo-cost" | "dynamo" | "kv-router" => Box::new(DynamoCostRouter::default()),
         _ => Box::new(GreedyStatePlaneRouter::default()),
     }
 }
@@ -684,7 +686,14 @@ async fn proxy_openai_path(
         trace.reusable_blocks.to_string(),
     );
 
-    let upstream = request.send().await?;
+    // Count this request as in flight on the chosen engine for the prefill
+    // window (dispatch → response headers), so concurrent requests see the load
+    // and a cache-aware policy spreads instead of dog-piling the one cache-hot
+    // engine. This is the gateway's own load signal feeding back into routing.
+    state.control.write().await.begin_request(&trace.engine_id);
+    let send_result = request.send().await;
+    state.control.write().await.end_request(&trace.engine_id);
+    let upstream = send_result?;
     let status = StatusCode::from_u16(upstream.status().as_u16())
         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 

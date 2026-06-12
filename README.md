@@ -81,7 +81,7 @@ mode runs one chosen combination in front of real engines.
 | Axis | Trait / type | Available | Planned |
 | --- | --- | --- | --- |
 | Inference engine / connector | `EngineEndpoint` + KV events | vLLM (OpenAI-compatible + KV events) | SGLang, LMCache events |
-| Routing policy | `quillcache_core` → `quillcache_router::RoutingPolicy` | `LeastLoadedRouter` (baseline), `GreedyStatePlaneRouter` (cache-aware), `PrefixAffinityRouter`, `RoundRobinRouter`, **`SloAwareRouter`** (SLO as a near-hard constraint), **`SessionAffinityRouter`** (pin a session/DAG to its engine) | network-aware |
+| Routing policy | `quillcache_core` → `quillcache_router::RoutingPolicy` | `LeastLoadedRouter` (baseline), `GreedyStatePlaneRouter` (cache-aware), **`DynamoCostRouter`** (mirrors NVIDIA Dynamo's KV-router cost function), `PrefixAffinityRouter`, `RoundRobinRouter`, **`SloAwareRouter`** (SLO as a near-hard constraint), **`SessionAffinityRouter`** (pin a session/DAG to its engine) | network-aware |
 | Index backend | `quillcache_core::IndexBackend` | `MemoryIndex` (reference), **Holt** (ART), **RocksDB** (LSM) | filesystem |
 | Runtime data plane | `quillcache_core::DataPlane` | `NoDataPlane`, **`TieredDataPlane`** (HBM/DRAM/SSD admission, promotion, demotion, eviction) | LMCache/KVBM/FlexKV adapters |
 | Execution adapter | gateway `action_sink` | HTTP action events + local mock sink | vLLM `kv_transfer`, SGLang/LMCache, Dynamo KVBM bridge |
@@ -94,11 +94,20 @@ Honesty matters more than big numbers. Two kinds of results live in this repo:
   - the **ART-vs-LSM storage study** (`bench-index`): prefix-scan latency,
     recovery, on-disk size, and **write amplification** (from RocksDB's own
     statistics) — these run real Holt / RocksDB engines.
-  - the **live demos**: cache-affine routing across **2 real vLLM** on Modal L4
-    (P99 TTFT 81 s → 4.3 s — *real, though the round-robin tail was amplified by
-    Modal scale-to-zero cold starts*), persistent residency surviving a restart,
-    the identity guard refusing cross-tenant reuse inline, and the inferred→precise
-    KV-event correction.
+  - the **control-plane overhead** (`bench/bench_gateway.py`): QuillCache's own
+    hot-path latency vs hitting the engine directly — **~0.2 ms median added**,
+    higher throughput than direct at concurrency (see below). A real
+    request-path measurement, and it caught a real O(N) bug.
+  - the **live demos**: fronting **2 real vLLM** on Modal L4 — the Dynamo-style
+    router is cache-affine (pins a shared prefix to the engine holding its KV,
+    real local hits in the decision headers), persistent residency survives a
+    restart, the identity guard refuses cross-tenant reuse inline, and the
+    inferred→precise KV-event correction works. *Steady-state (concurrency 1)
+    warm TTFT is the honest number; high-concurrency **tail** latency on Modal is
+    unreliable because scale-to-zero re-cold-starts a container mid-run (100 s+
+    outliers) — a serverless-deployment artifact, not a routing property. The old
+    "81 s → 4.3 s" headline was exactly this cold-start noise; it is not a clean
+    routing result and is no longer claimed as one.*
 - **Modeled** — cost-model simulations, illustrative of a mechanism, **not** run
   on real GPUs: the `tiered` (KVBM-style, ~76% cost cut), `disagg` (PD TTFT,
   24–52%), and `simulate` experiments use an uncalibrated cost model. They show
@@ -257,6 +266,83 @@ unchanged. This is the benchmark working as intended: it is a research
 instrument, not a victory-lap table — it found the bottleneck, then measured the
 fix.
 
+## Routing: the Dynamo KV-router cost function, reproduced
+
+`DynamoCostRouter` implements the same cost function NVIDIA Dynamo's KV router
+runs (`lib/kv-router/src/scheduling/selector.rs`). For each worker:
+
+```text
+overlap_credit   = overlap_score_credit · device_overlap_blocks      (default 1.0)
+                 + host_cache_hit_weight · host_overlap_blocks         (default 0.75)
+                 + disk_cache_hit_weight · disk_overlap_blocks         (default 0.25)
+adjusted_prefill = max(0, raw_prefill_blocks − overlap_credit)
+cost             = prefill_load_scale · adjusted_prefill + decode_blocks
+```
+
+It routes to the lowest-cost worker (`temperature == 0`, Dynamo's default) or
+softmax-samples the costs when `temperature > 0`. `raw_prefill_blocks` is the
+prompt's blocks plus the worker's queued prefill load; `device/host/disk overlap`
+are the request's blocks already resident on that worker in HBM / DRAM / SSD;
+`decode_blocks` is the worker's active decode load. The credit weights make a
+GPU-resident prefix hit worth 4× an SSD one — the cache-locality-vs-load
+trade-off, as a single number. A unit test reproduces Dynamo's own published
+worked example (costs 18 / 10 / 11 → pick worker 2). The other policies
+(`greedy`, `prefix-affinity`, `round-robin`, `slo-aware`, `session-affinity`)
+remain for apples-to-apples comparison on the same trace.
+
+## Control-plane overhead (measured)
+
+A control plane sits in the hot path of every request, so its **own** latency is
+the first thing to measure. `bench/bench_gateway.py` drives the same shared-prefix
+streaming workload two ways — client→engine vs client→QuillCache→engine — against
+the *same* near-instant mock engine (`tools/mock_engine.py`); the difference is
+QuillCache's added cost (parse, prompt→block-hash derivation, the routing
+decision + residency write-back, decision headers, the streaming proxy).
+
+| path | p50 | p99 | throughput |
+| --- | --- | --- | --- |
+| direct → engine | 0.21 ms | 0.31 ms | — |
+| **through QuillCache** | **0.42 ms** | **0.45 ms** | 121% of direct @ C=32 |
+
+**QuillCache adds ~0.2 ms median per request** (C=1, no contention), and at
+concurrency 32 it sustains *higher* throughput than hitting the engine directly
+(it pools upstream connections). That number is the *fixed* version: the
+benchmark first measured a flat **~14 ms** p50 at C=32, and the cause was a
+genuine hot-path bug — `plan()` and the inline reuse guard each took a full O(N)
+snapshot of the **entire** residency index on every request (cloning all ~2000
+resident records, twice). Replacing those with request-scoped lookups (the
+`IndexBackend`'s O(1) `locate()` for routing + an O(matches) content-hash reverse
+index for the guard) cut the median overhead **~35×**, to 0.2 ms. The benchmark
+working as intended — it caught the bottleneck, then measured the fix.
+
+## Real-engine validation on Modal (and an honest serverless caveat)
+
+The gateway runs in front of **2 real vLLM** (Qwen2.5-0.5B) on Modal L4
+(`deploy/modal_vllm.py`, `examples/quillcache-modal.yaml`). What this validates,
+end-to-end, against real engines:
+
+- **The `DynamoCostRouter` is cache-affine on real hardware.** With a shared
+  system prompt, it pinned **every** request to the one engine holding that
+  prefix's KV (engine distribution from the decision headers), with real local
+  hits (`x-quillcache-local-hits` > 0 on 16/24 served) — the Dynamo cost function
+  steering a real fleet via the inferred-residency loop, no KV-events bridge.
+- **Real streamed TTFT** flows through the gateway with full decision headers;
+  warm steady-state TTFT was ~1.2 s p50 for this 0.5B model on L4.
+
+**The honest caveat (this is the interview-useful part):** Modal scales each
+engine to zero on idle, so a request to an idle engine pays a **~120 s cold
+start**. That — not routing — dominates tail latency, and it is non-deterministic
+(an engine can scale down *between* warmup and measurement). So **Modal is a good
+functional harness but a poor steady-state-latency harness.** The earlier
+"P99 81 s → 4.3 s" headline was exactly this cold-start artifact and is no longer
+claimed as a routing result. For clean latency, QuillCache measures its own
+overhead against a local engine (~0.2 ms, above) and treats the cache-vs-load
+routing behaviour as something to prove deterministically (the
+`dynamo_cost_*` unit tests) rather than on noisy serverless GPUs. Reproduce:
+`modal deploy deploy/modal_vllm.py` (×2 with `QC_VLLM_APP`), then
+`bench/run_trace.py --warmup-urls <a>,<b>` to absorb the cold start before
+measuring.
+
 ## Packages
 
 | Package | Role |
@@ -331,6 +417,17 @@ See [`docs/mvp-runbook.md`](docs/mvp-runbook.md) for the vLLM KV-events bridge.
 ## Status (v0.1)
 
 - ✅ OpenAI-compatible gateway with cache-aware routing and decision headers.
+- ✅ **`DynamoCostRouter`** — the NVIDIA Dynamo KV-router cost function
+  (`prefill_load_scale · adjusted_prefill_blocks + decode_blocks`, HBM/DRAM/SSD
+  overlap credits, temperature softmax), with a test reproducing Dynamo's own
+  worked example. Made **load-aware online**: the gateway feeds its in-flight
+  count back into worker load, so the policy spreads under load instead of
+  dog-piling the cache-hot engine (the llm-d "prefix + load" lesson).
+- ✅ **Measured control-plane overhead** (`bench/bench_gateway.py` + committed
+  `tools/mock_engine.py`): **~0.2 ms** median added per request, >100% of direct
+  throughput at concurrency. Surfaced and fixed a real hot-path bug — `plan()`
+  and the reuse guard were snapshotting the whole residency index per request
+  (O(N)); request-scoped lookups cut median overhead ~35×.
 - ✅ **Live SLO goodput** — the gateway times real first-token latency (arrival → first streamed chunk) against each request's TTFT SLO budget and reports `served` / `met_slo` / `goodput_pct` / `mean_ttft_ms` at `/v1/state`. A measured online metric, not a cost-model estimate.
 - ✅ **Closed online residency loop**: the gateway records inferred placement from its own routing decisions and derives prefix blocks from the prompt, so cache-aware routing works end-to-end without a KV-events bridge (verified live: a 2nd request sharing a system prompt routes to the same engine with a real local hit). KV events (Tier 2) upgrade inferred residency to ground truth.
 - ✅ Vendor-neutral `/v1/kv-events` ingest (vLLM BlockStored / BlockRemoved / AllBlocksCleared shape).

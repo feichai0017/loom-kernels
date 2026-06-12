@@ -517,6 +517,215 @@ impl RoutingPolicy for SessionAffinityRouter {
     }
 }
 
+/// Knobs for [`DynamoCostRouter`], named and defaulted to match NVIDIA Dynamo's
+/// `KvRouterConfig` (`lib/kv-router/src/scheduling/config.rs`) so the cost
+/// function is the same one Dynamo's KV router runs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DynamoCostConfig {
+    /// Credit multiplier for prefix blocks already on the worker's **GPU/HBM**.
+    /// Dynamo `overlap_score_credit`, default 1.0. 0.0 ignores caches entirely.
+    pub overlap_score_credit: f64,
+    /// Weight on the overlap-adjusted prefill load relative to decode blocks.
+    /// Dynamo `prefill_load_scale`, default 1.0.
+    pub prefill_load_scale: f64,
+    /// Credit multiplier for prefix blocks in the worker's **CPU/host** tier.
+    /// Dynamo `host_cache_hit_weight`, default 0.75.
+    pub host_cache_hit_weight: f64,
+    /// Credit multiplier for prefix blocks in the worker's **disk/SSD** tier.
+    /// Dynamo `disk_cache_hit_weight`, default 0.25.
+    pub disk_cache_hit_weight: f64,
+    /// 0.0 = deterministic argmin over cost. >0 = softmax-sample the cost logits
+    /// to spread load (Dynamo `router_temperature`, default 0.0).
+    pub temperature: f64,
+    /// Tokens per KV block, to convert a worker's queued prefill tokens into
+    /// block units for `raw_prefill_blocks`.
+    pub block_tokens: u32,
+}
+
+impl Default for DynamoCostConfig {
+    fn default() -> Self {
+        Self {
+            overlap_score_credit: 1.0,
+            prefill_load_scale: 1.0,
+            host_cache_hit_weight: 0.75,
+            disk_cache_hit_weight: 0.25,
+            temperature: 0.0,
+            block_tokens: 64,
+        }
+    }
+}
+
+/// KV-aware router that mirrors **NVIDIA Dynamo's** KV-router cost function. For
+/// each worker it computes
+///
+/// ```text
+/// overlap_credit       = overlap_score_credit · device_overlap_blocks
+///                      + host_cache_hit_weight · host_overlap_blocks
+///                      + disk_cache_hit_weight · disk_overlap_blocks
+/// adjusted_prefill     = max(0, raw_prefill_blocks − overlap_credit)
+/// cost                 = prefill_load_scale · adjusted_prefill + decode_blocks
+/// ```
+///
+/// and routes to the worker with the **lowest cost** (`temperature == 0`), or
+/// softmax-samples the costs when `temperature > 0` — exactly Dynamo's
+/// `worker_logit` / `select_worker` (`lib/kv-router/src/scheduling/selector.rs`).
+/// `raw_prefill_blocks` is the request's prompt blocks plus the worker's queued
+/// prefill load (so a busy worker looks more expensive); `device/host/disk
+/// overlap` are the request's blocks already resident on that worker in HBM /
+/// CPU-DRAM / SSD; `decode_blocks` is the worker's active decode load.
+///
+/// Where QuillCache's [`GreedyStatePlaneRouter`] blends latency estimates into an
+/// additive score, this reproduces Dynamo's block-count cost so the fleet can be
+/// compared against the production reference design apples-to-apples. After
+/// selecting the worker it reuses [`plan_for_worker`] for the per-block
+/// hit/transfer/recompute accounting, so its `RouteDecision` is directly
+/// comparable to every other policy.
+#[derive(Debug, Clone, Default)]
+pub struct DynamoCostRouter {
+    cost_model: CostModel,
+    config: DynamoCostConfig,
+}
+
+impl DynamoCostRouter {
+    pub fn new(cost_model: CostModel) -> Self {
+        Self {
+            cost_model,
+            config: DynamoCostConfig::default(),
+        }
+    }
+
+    pub fn with_config(cost_model: CostModel, config: DynamoCostConfig) -> Self {
+        Self { cost_model, config }
+    }
+
+    /// Dynamo's per-worker cost ("logit"). Lower is better.
+    fn worker_cost(
+        &self,
+        request: &RequestShape,
+        worker: &WorkerState,
+        residency: &[CacheResidency],
+    ) -> f64 {
+        let block_tokens = self.config.block_tokens.max(1);
+        // raw_prefill_blocks = this request's prompt blocks + the worker's
+        // already-queued prefill load (in block units).
+        let queued_blocks = f64::from(worker.queued_prefill_tokens) / f64::from(block_tokens);
+        let raw_prefill_blocks = request.blocks.len() as f64 + queued_blocks;
+
+        // Per-tier overlap: the request's blocks already resident on THIS worker.
+        let (mut device, mut host, mut disk) = (0.0_f64, 0.0_f64, 0.0_f64);
+        for block in &request.blocks {
+            let on_worker = residency
+                .iter()
+                .find(|r| r.worker_id == worker.id && r.key == *block);
+            match on_worker.map(|r| r.tier) {
+                Some(CacheTier::Hbm) => device += 1.0,
+                Some(CacheTier::RemoteHbm) | Some(CacheTier::CpuDram) => host += 1.0,
+                Some(CacheTier::LocalSsd) | Some(CacheTier::ObjectStore) => disk += 1.0,
+                None => {}
+            }
+        }
+
+        let overlap_credit = self.config.overlap_score_credit * device
+            + self.config.host_cache_hit_weight * host
+            + self.config.disk_cache_hit_weight * disk;
+        let adjusted_prefill = (raw_prefill_blocks - overlap_credit).max(0.0);
+        let decode_blocks = f64::from(worker.running_decodes);
+        self.config.prefill_load_scale * adjusted_prefill + decode_blocks
+    }
+
+    pub fn route(
+        &self,
+        request: &RequestShape,
+        workers: &[WorkerState],
+        residency: &[CacheResidency],
+    ) -> Result<RouteDecision, RouterError> {
+        if workers.is_empty() {
+            return Err(RouterError::NoWorkers);
+        }
+        let costs: Vec<f64> = workers
+            .iter()
+            .map(|w| self.worker_cost(request, w, residency))
+            .collect();
+
+        let idx = if self.config.temperature > 0.0 {
+            softmax_sample(&costs, self.config.temperature, &request.id)
+        } else {
+            // Deterministic argmin; ties broken by lowest worker index.
+            costs
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| a.total_cmp(b))
+                .map(|(i, _)| i)
+                .unwrap_or(0)
+        };
+
+        let worker_by_id: HashMap<&str, &WorkerState> = workers
+            .iter()
+            .map(|worker| (worker.id.as_str(), worker))
+            .collect();
+        Ok(plan_for_worker(
+            &self.cost_model,
+            request,
+            &workers[idx],
+            &worker_by_id,
+            residency,
+        ))
+    }
+}
+
+impl RoutingPolicy for DynamoCostRouter {
+    fn name(&self) -> &str {
+        "dynamo-cost"
+    }
+
+    fn route(
+        &self,
+        request: &RequestShape,
+        workers: &[WorkerState],
+        residency: &[CacheResidency],
+    ) -> Result<RouteDecision, RouterError> {
+        DynamoCostRouter::route(self, request, workers, residency)
+    }
+}
+
+/// Softmax-sample an index over cost logits, mirroring Dynamo's `softmax_sample`:
+/// negate+rescale the costs to `[-1/temperature, 0]` (lower cost → higher
+/// probability) using the candidate set's own min/max range, then inverse-CDF
+/// sample. Seeded deterministically from the request id so a given request always
+/// routes the same way and tests are reproducible (Dynamo uses a thread RNG).
+fn softmax_sample(costs: &[f64], temperature: f64, seed_key: &str) -> usize {
+    let n = costs.len();
+    if n <= 1 {
+        return 0;
+    }
+    let min = costs.iter().cloned().fold(f64::INFINITY, f64::min);
+    let max = costs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    if (max - min).abs() < f64::EPSILON {
+        return 0; // all equal — first wins
+    }
+    let scale = -1.0 / ((max - min) * temperature);
+    let max_scaled = min * scale;
+    let weights: Vec<f64> = costs
+        .iter()
+        .map(|c| (c * scale - max_scaled).exp())
+        .collect();
+    let total: f64 = weights.iter().sum();
+
+    // Deterministic uniform in [0,1) from a hash of the request id.
+    let mut hasher = DefaultHasher::new();
+    seed_key.hash(&mut hasher);
+    let u = (hasher.finish() >> 11) as f64 / (1u64 << 53) as f64;
+
+    let mut acc = 0.0;
+    for (i, w) in weights.iter().enumerate() {
+        acc += w / total;
+        if u < acc {
+            return i;
+        }
+    }
+    n - 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -702,5 +911,178 @@ mod tests {
         let decision = router.route(&turn1, &workers, &residency).unwrap();
         assert_eq!(decision.worker_id, other);
         assert_eq!(decision.local_hits.len(), 1);
+    }
+
+    /// A request whose prompt is `n` distinct blocks under the default identity.
+    fn request_with_n_blocks(n: u32) -> RequestShape {
+        let blocks = (0..n)
+            .map(|i| {
+                KvBlockKey::new(
+                    "llama",
+                    "tok",
+                    "tenant-a",
+                    format!("p{i}"),
+                    format!("b{i}"),
+                    i,
+                    64,
+                )
+            })
+            .collect();
+        RequestShape {
+            id: "req-dyn".to_string(),
+            model_id: "llama".to_string(),
+            tokenizer_id: "tok".to_string(),
+            adapter_id: None,
+            tenant_id: "tenant-a".to_string(),
+            session_id: None,
+            blocks,
+            estimated_decode_tokens: 32,
+            slo: SloTarget::default(),
+        }
+    }
+
+    #[test]
+    fn dynamo_cost_reproduces_official_worked_example() {
+        // From Dynamo's router-concepts doc (overlap_score_credit = 1.0):
+        //   w1: raw 10, device overlap 2, decode 10 -> cost 8 + 10 = 18
+        //   w2: raw 10, device overlap 5, decode  5 -> cost 5 +  5 = 10  (chosen)
+        //   w3: raw 10, device overlap 8, decode  9 -> cost 2 +  9 = 11
+        let request = request_with_n_blocks(10);
+        let workers = vec![
+            WorkerState::new("w1", "rack-a").with_load(0, 10),
+            WorkerState::new("w2", "rack-a").with_load(0, 5),
+            WorkerState::new("w3", "rack-a").with_load(0, 9),
+        ];
+        let mut residency = Vec::new();
+        let put =
+            |res: &mut Vec<CacheResidency>, worker: &str, count: usize, req: &RequestShape| {
+                for block in req.blocks.iter().take(count) {
+                    res.push(CacheResidency::hbm(worker, block.clone(), 4 * 1024 * 1024));
+                }
+            };
+        put(&mut residency, "w1", 2, &request);
+        put(&mut residency, "w2", 5, &request);
+        put(&mut residency, "w3", 8, &request);
+
+        let router = DynamoCostRouter::default();
+        assert_eq!(router.worker_cost(&request, &workers[0], &residency), 18.0);
+        assert_eq!(router.worker_cost(&request, &workers[1], &residency), 10.0);
+        assert_eq!(router.worker_cost(&request, &workers[2], &residency), 11.0);
+
+        let decision = router.route(&request, &workers, &residency).unwrap();
+        assert_eq!(decision.worker_id, "w2");
+        // The chosen worker's accounting reflects its 5 local HBM hits.
+        assert_eq!(decision.local_hits.len(), 5);
+    }
+
+    #[test]
+    fn dynamo_cost_credits_lower_tiers_less_than_hbm() {
+        // Same overlap count, but on HBM vs SSD: HBM (credit 1.0) must beat SSD
+        // (credit 0.25), so the device-resident worker wins.
+        let request = request_with_n_blocks(4);
+        let workers = vec![
+            WorkerState::new("hbm-worker", "rack-a"),
+            WorkerState::new("ssd-worker", "rack-a"),
+        ];
+        let mut residency = Vec::new();
+        for block in &request.blocks {
+            residency.push(CacheResidency::hbm(
+                "hbm-worker",
+                block.clone(),
+                4 * 1024 * 1024,
+            ));
+            residency.push(CacheResidency {
+                key: block.clone(),
+                worker_id: "ssd-worker".to_string(),
+                tier: CacheTier::LocalSsd,
+                bytes: 4 * 1024 * 1024,
+                last_access_ms: 0,
+                ref_count: 0,
+                pinned: false,
+            });
+        }
+        let router = DynamoCostRouter::default();
+        // HBM: 4 - 1.0*4 = 0 ; SSD: 4 - 0.25*4 = 3.
+        assert_eq!(router.worker_cost(&request, &workers[0], &residency), 0.0);
+        assert_eq!(router.worker_cost(&request, &workers[1], &residency), 3.0);
+        assert_eq!(
+            router
+                .route(&request, &workers, &residency)
+                .unwrap()
+                .worker_id,
+            "hbm-worker"
+        );
+    }
+
+    #[test]
+    fn dynamo_cost_spills_off_cache_hot_engine_under_load() {
+        // Engine "a" holds the request's whole 4-block prefix (overlap credit 4);
+        // engine "b" is cold. Cost(a) = (4 − 4) + load_a, Cost(b) = 4 + 0, so a
+        // wins while load_a < 4 and loses once load_a > 4 — the cache-vs-load
+        // crossover the live in-flight feedback drives on the gateway.
+        let request = request_with_n_blocks(4);
+        let residency: Vec<CacheResidency> = request
+            .blocks
+            .iter()
+            .map(|b| CacheResidency::hbm("a", b.clone(), 4 * 1024 * 1024))
+            .collect();
+        let router = DynamoCostRouter::default();
+
+        // Light load on the cache-hot engine: reuse wins, stay on "a".
+        let light = vec![
+            WorkerState::new("a", "r").with_load(0, 2),
+            WorkerState::new("b", "r").with_load(0, 0),
+        ];
+        assert_eq!(
+            router
+                .route(&request, &light, &residency)
+                .unwrap()
+                .worker_id,
+            "a"
+        );
+
+        // Heavy load on the cache-hot engine: load outweighs the cache credit,
+        // so the router spills to the cold-but-idle engine "b".
+        let heavy = vec![
+            WorkerState::new("a", "r").with_load(0, 6),
+            WorkerState::new("b", "r").with_load(0, 0),
+        ];
+        assert_eq!(
+            router
+                .route(&request, &heavy, &residency)
+                .unwrap()
+                .worker_id,
+            "b"
+        );
+    }
+
+    #[test]
+    fn dynamo_cost_zero_credit_ignores_cache() {
+        // overlap_score_credit = 0 -> pure load balancing (cost = decode_blocks),
+        // so the cache-rich-but-busy worker loses to the idle one.
+        let request = request_with_n_blocks(4);
+        let workers = vec![
+            WorkerState::new("warm-busy", "rack-a").with_load(0, 8),
+            WorkerState::new("cold-idle", "rack-a").with_load(0, 0),
+        ];
+        let residency: Vec<CacheResidency> = request
+            .blocks
+            .iter()
+            .map(|b| CacheResidency::hbm("warm-busy", b.clone(), 4 * 1024 * 1024))
+            .collect();
+        let router = DynamoCostRouter::with_config(
+            CostModel::default(),
+            DynamoCostConfig {
+                overlap_score_credit: 0.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            router
+                .route(&request, &workers, &residency)
+                .unwrap()
+                .worker_id,
+            "cold-idle"
+        );
     }
 }

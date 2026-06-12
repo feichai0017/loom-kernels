@@ -6,7 +6,6 @@ use quillcache_core::{
 };
 use quillcache_router::{GreedyStatePlaneRouter, RouteDecision, RouterError, RoutingPolicy};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -274,7 +273,16 @@ impl ControlPlane {
     }
 
     pub fn plan(&self, request: &RequestShape) -> Result<RequestPlan, ControlError> {
-        let residency = self.residency.snapshot();
+        // The router only ever inspects residency for *this request's* blocks
+        // (local hit / transfer / recompute per block), so look those up
+        // directly instead of dumping the whole index. O(request blocks) point
+        // lookups — O(1) on the flat map, O(log n)/O(matches) on ART/LSM — keep
+        // the online routing decision off the index's O(N) snapshot path.
+        let residency: Vec<CacheResidency> = request
+            .blocks
+            .iter()
+            .flat_map(|block| self.residency.locate(block))
+            .collect();
         let decode_workers = self
             .workers
             .iter()
@@ -419,30 +427,22 @@ impl ControlPlane {
     /// the online path can report the unsafe reuse it prevented (the same
     /// property the `safe-reuse` experiment measures offline).
     pub fn audit_reuse(&self, request: &RequestShape) -> ReuseAudit {
-        let snapshot = self.residency.snapshot();
-        let mut by_content: HashMap<&str, Vec<&KvBlockKey>> = HashMap::new();
-        for residency in &snapshot {
-            by_content
-                .entry(residency.key.block_hash.as_str())
-                .or_default()
-                .push(&residency.key);
-        }
-
         let mut audit = ReuseAudit::default();
         for block in &request.blocks {
-            let Some(resident_keys) = by_content.get(block.block_hash.as_str()) else {
+            // Only the blocks sharing *this* block's content hash can be a
+            // (possibly cross-identity) reuse candidate — seek them directly
+            // rather than scanning a full snapshot per request.
+            let resident = self.residency.residency_by_content_hash(&block.block_hash);
+            if resident.is_empty() {
                 continue;
-            };
+            }
             let scope = IdentityScope::from_key(block);
-            if resident_keys.iter().any(|key| scope.matches(key)) {
+            if resident.iter().any(|r| scope.matches(&r.key)) {
                 audit.safe_reusable += 1;
                 continue;
             }
             // Content is resident, but only under other identities: refused.
-            if let Some(violation) = resident_keys
-                .iter()
-                .find_map(|key| scope.reuse_violation(key))
-            {
+            if let Some(violation) = resident.iter().find_map(|r| scope.reuse_violation(&r.key)) {
                 audit.refused_unsafe += 1;
                 match violation {
                     ReuseViolation::Tenant => audit.refused_cross_tenant += 1,
@@ -453,6 +453,26 @@ impl ControlPlane {
             }
         }
         audit
+    }
+
+    /// Mark a request as in flight on an engine, bumping that worker's live
+    /// decode load. The online router reads static `WorkerState` load, so without
+    /// this the cost function's load term is inert and a cache-aware policy
+    /// over-pins every request to the one cache-hot engine. Feeding the gateway's
+    /// own in-flight count back into the worker state makes load-aware routing
+    /// real on the live path — the gateway-side analogue of the engine metrics
+    /// Dynamo/llm-d route on. Call [`Self::end_request`] when the request drains.
+    pub fn begin_request(&mut self, engine_id: &str) {
+        if let Some(worker) = self.workers.iter_mut().find(|w| w.id == engine_id) {
+            worker.running_decodes = worker.running_decodes.saturating_add(1);
+        }
+    }
+
+    /// Release a request's in-flight load on an engine (see [`Self::begin_request`]).
+    pub fn end_request(&mut self, engine_id: &str) {
+        if let Some(worker) = self.workers.iter_mut().find(|w| w.id == engine_id) {
+            worker.running_decodes = worker.running_decodes.saturating_sub(1);
+        }
     }
 
     pub fn engine(&self, id: &str) -> Option<&EngineEndpoint> {
@@ -604,6 +624,7 @@ impl ControlPlane {
 mod tests {
     use super::*;
     use quillcache_core::{EngineKind, SloTarget};
+    use std::collections::HashMap;
 
     fn engine() -> EngineEndpoint {
         EngineEndpoint {

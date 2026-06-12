@@ -78,6 +78,26 @@ def pct(values, p):
     return ordered[min(len(ordered) - 1, int(len(ordered) * p))]
 
 
+def warm(urls, model, per_engine, max_tokens):
+    """Pre-warm each engine *directly* (bypassing the gateway) so the measured
+    run sees steady-state TTFT, not container boot / first-request CUDA-graph
+    capture. On Modal (scale-to-zero) the first request to a cold engine can take
+    30-120s — that is a deployment artifact, not a routing property, so we absorb
+    it here. Warming the shared prefix on every engine also makes the affinity-vs-
+    round-robin comparison purely about routing, both with warm prefix caches."""
+    for url in urls:
+        ok = False
+        for attempt in range(3):
+            r = one_request(url, model, attempt, max_tokens)
+            if r.get("ok"):
+                ok = True
+                break
+            time.sleep(2)
+        print(f"  warm {url}: {'ready' if ok else 'FAILED (cold?)'}")
+        for i in range(max(0, per_engine - 1)):
+            one_request(url, model, i, max_tokens)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--base-url", default="http://127.0.0.1:8080")
@@ -85,7 +105,20 @@ def main():
     ap.add_argument("--requests", type=int, default=64)
     ap.add_argument("--concurrency", type=int, default=8)
     ap.add_argument("--max-tokens", type=int, default=32)
+    ap.add_argument(
+        "--warmup-urls",
+        default="",
+        help="comma-separated engine base URLs to warm DIRECTLY before measuring "
+        "(kills the cold-start confound); e.g. https://a.modal.run,https://b.modal.run",
+    )
+    ap.add_argument("--warmup", type=int, default=4, help="warmup requests per engine")
     args = ap.parse_args()
+
+    warm_urls = [u.strip() for u in args.warmup_urls.split(",") if u.strip()]
+    if warm_urls:
+        print(f"warming {len(warm_urls)} engine(s) directly ({args.warmup} reqs each)...")
+        warm(warm_urls, args.model, args.warmup, args.max_tokens)
+        print("warm complete — measuring steady-state through the gateway\n")
 
     results = []
     with ThreadPoolExecutor(max_workers=args.concurrency) as pool:

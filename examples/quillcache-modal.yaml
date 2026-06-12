@@ -1,0 +1,21 @@
+# QuillCache gateway in front of a 2-vLLM fleet on Modal L4, using the
+# Dynamo-style KV-router cost function. Swap `policy:` to round-robin for the
+# cache-blind baseline. Warm both engines first (bench/run_trace.py --warmup-urls)
+# so the measured TTFT is steady-state, not Modal scale-to-zero cold start.
+bind: 127.0.0.1:8080
+policy: dynamo-cost
+engines:
+  - id: modal-vllm-a
+    kind: Vllm
+    base_url: https://feichai0017--quillcache-vllm-serve.modal.run
+    model_id: Qwen/Qwen2.5-0.5B-Instruct
+    tokenizer_id: Qwen/Qwen2.5-0.5B-Instruct
+    tenant_id: default
+    locality_domain: modal
+  - id: modal-vllm-b
+    kind: Vllm
+    base_url: https://feichai0017--quillcache-vllm-b-serve.modal.run
+    model_id: Qwen/Qwen2.5-0.5B-Instruct
+    tokenizer_id: Qwen/Qwen2.5-0.5B-Instruct
+    tenant_id: default
+    locality_domain: modal
