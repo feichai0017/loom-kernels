@@ -20,8 +20,7 @@
 //!
 //! Also here: [`StoreDataPlane`] (the Dynamo-KVBM-style tiered block manager that
 //! implements the control plane's `DataPlane` seam, fused with per-worker
-//! [`LocalKvStore`] byte pools), and [`serve_listener`] (the node block-serving
-//! endpoint for the real-engine connector's path B).
+//! [`LocalKvStore`] byte pools).
 
 use bytes::Bytes;
 use quillcache_core::{
@@ -34,10 +33,6 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-
-pub mod transfer;
-pub use transfer::*;
 
 // The Mooncake-`store`-aligned data plane (Phase 2): object/replica model, the
 // per-segment buffer allocator, and the replica placement strategy. The
@@ -521,34 +516,6 @@ impl LocalKvStore {
 
     pub fn evictions(&self) -> u64 {
         self.evictions
-    }
-}
-
-// =====================================================================
-// Cross-node fetch — the transfer-engine read path of the pooled store.
-// =====================================================================
-
-/// Serves a [`LocalKvStore`]'s blocks to peer nodes over the transfer engine.
-/// This is the node's side of Mooncake's pooled store: any node can read a block
-/// resident here.
-#[derive(Clone)]
-pub struct StoreBlockSource {
-    inner: Arc<Mutex<LocalKvStore>>,
-}
-
-impl StoreBlockSource {
-    pub fn new(inner: Arc<Mutex<LocalKvStore>>) -> Self {
-        Self { inner }
-    }
-}
-
-impl BlockSource for StoreBlockSource {
-    fn get(&self, key: &KvBlockKey) -> Option<Bytes> {
-        self.inner.lock().unwrap().get_raw(key)
-    }
-
-    fn put(&self, key: KvBlockKey, data: Bytes) {
-        self.inner.lock().unwrap().put_dram(key, data);
     }
 }
 

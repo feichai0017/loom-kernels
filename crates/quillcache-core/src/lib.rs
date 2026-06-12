@@ -5,7 +5,6 @@ use std::str::FromStr;
 
 pub mod bench;
 pub mod control;
-pub mod master;
 pub mod router;
 
 // Optional residency-index backends (the ART-vs-LSM study) live here as
@@ -17,7 +16,6 @@ pub mod index_holt;
 pub mod index_rocksdb;
 
 pub use control::*;
-pub use master::*;
 pub use router::*;
 
 #[cfg(feature = "holt")]
