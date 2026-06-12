@@ -40,6 +40,7 @@ pub use transfer::*;
 pub mod allocation_strategy;
 pub mod allocator;
 pub mod client;
+pub mod disk_tier;
 pub mod master_service;
 pub mod replica;
 pub mod types;
@@ -50,6 +51,7 @@ pub use allocation_strategy::{
 };
 pub use allocator::{AllocatedBuffer, BufferAllocator, OffsetBufferAllocator};
 pub use client::{DummyClient, RealClient};
+pub use disk_tier::DiskTier;
 pub use master_service::MasterService;
 pub use replica::{Replica, ReplicaData, ReplicaList, ReplicaStatus};
 pub use types::{ErrorCode, ObjectKey, ReplicaId, ReplicateConfig, SegmentName, Slice};

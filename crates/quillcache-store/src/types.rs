@@ -68,6 +68,8 @@ pub enum ErrorCode {
     BufferOverflow,
     #[error("invalid replica")]
     InvalidReplica,
+    #[error("io: {0}")]
+    Io(String),
     /// QuillCache's identity guard: the object is resident but was written by a
     /// different identity, so serving it would be a cross-tenant leak or a
     /// cross-adapter/model correctness error. Mooncake keys are identity-agnostic;
