@@ -14,7 +14,7 @@ The pieces (all in this repo):
 | `bridge/quillcache_store_client.py` | stdlib client: the store master (HTTP) + the transfer wire (TCP) |
 | `bridge/quillcache_v1_connector.py` | the **real** vLLM 0.22.1 `KVConnectorBase_V1` on the store (GPU-verified) |
 | `bridge/quillcache_store_demo.py` | a no-GPU demo of the store offload/load path |
-| `quillcache pd-proxy` | orchestrates prefill → store → decode across two engines (`src/pd_proxy.rs`) |
+| `quillcache pd-proxy` | the disaggregation **router**: mints a `transfer_id` and drives prefill → store → decode across two engines via vLLM's `kv_transfer_params` handshake (`src/pd_proxy.rs`) |
 
 The flow is Mooncake's: **put** = `put_start` (master allocates replica buffers)
 → WRITE the bytes to each `(segment, offset)` over the transfer engine →
@@ -59,6 +59,13 @@ is written against the deployed vLLM 0.22.1 API and **verified on a Modal L4**:
 - `deploy/modal_vllm_pd.py` — disaggregated P/D on a 2-GPU box: one request
   through `quillcache pd-proxy` warms the store on GPU 0 (prefill) and reuses it
   on GPU 1 (decode). KV computed on one instance, reused by another, via the store.
+- `deploy/modal_vllm_disagg.py` — **true vLLM-native P/D**: prefill runs as
+  `kv_producer` (GPU 0), decode as `kv_consumer` (GPU 1), and `pd-proxy` is the
+  router that mints a `transfer_id` per request. The producer offloads the
+  request's KV under that id (`do_remote_decode`); the consumer pulls it by id and
+  skips prefill (`do_remote_prefill`). Verified with a *unique* prompt (no prefix
+  cache possible), and the disagg output matches a monolithic reference token for
+  token — proof the KV computed on GPU 0 is pulled onto GPU 1 correctly.
 
 The connector keeps vLLM's paged-KV slot-mapping extract/inject verbatim (correct
 per attention backend) and swaps disk-safetensors for the identity-guarded store.
@@ -72,11 +79,19 @@ per attention backend) and swaps disk-safetensors for the identity-guarded store
 | `quillcache_store_client.py` (master HTTP + transfer wire) | **real, tested** (the local e2e above) |
 | connector offload / load (two-phase Put, identity-guarded Get) | **real, tested** (the local e2e above) |
 | vLLM `KVConnectorBase_V1` connector + KV-tensor (de)serialization | **real, L4-verified** (`deploy/modal_vllm_connector.py`) |
-| disaggregated P/D (prefill → store → decode via `pd-proxy`) | **real, 2×L4-verified** (`deploy/modal_vllm_pd.py`) |
+| content-addressed P/D (prefill → store → decode via `pd-proxy`, `kv_both`) | **real, 2×L4-verified** (`deploy/modal_vllm_pd.py`) |
+| true vLLM-native P/D (`kv_producer`/`kv_consumer` + `transfer_id` handshake) | **real, 2×L4-verified** (`deploy/modal_vllm_disagg.py`) — output matches a monolithic reference token-for-token |
 | multi-node (store on a separate node) | **code-ready** — `master_url` / `segment_endpoints` are arbitrary `host:port`, and the TCP byte path is identical to localhost; only Modal cross-container plumbing (tunnels) remains |
 | RDMA / GPUDirect transfer (vs the TCP wire) | **reserved** — `--features rdma/nvlink`, needs a NIC / multi-GPU |
 
 This mirrors the project's honesty rule: the store, the byte-moving transfer
-engine, the connector, master HA, and disaggregated P/D are real and verified
-(laptop / Docker etcd / Modal L4); zero-copy RDMA/GPUDirect is the clearly-marked
-seam that needs a NIC or multi-GPU.
+engine, the connector, master HA, and both content-addressed and vLLM-native
+disaggregated P/D are real and verified (laptop / Docker etcd / Modal L4);
+zero-copy RDMA/GPUDirect is the clearly-marked seam that needs a NIC or multi-GPU.
+
+> A note on the numbers: in the 2×L4 demo the disagg path is *slower* than the
+> monolithic one (~1.6s vs ~0.2s) because the prompt is tiny — the proxy→store→
+> proxy round-trip and safetensors I/O dwarf the prefill it saves. Disaggregation
+> wins on long shared prefixes and on decoupling prefill/decode capacity, not on
+> short prompts; this run proves *correctness* of the vLLM-native mechanism, not a
+> latency win at this size.

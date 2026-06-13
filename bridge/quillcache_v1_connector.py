@@ -20,6 +20,20 @@ used by docs/real-engine-pool.md. The identity guard is QuillCache's
 differentiator over a vanilla shared-storage connector: cross-tenant / cross-model
 KV reuse is refused at the store, not merely by convention.
 
+Two operating modes, selected by KVTransferConfig.kv_role:
+
+  - `kv_both` (default): single-pool, **content-addressed** reuse. A prefix's KV
+    is keyed by `qc/{identity+prompt-hash}`; any later request with the same
+    prefix transparently loads it. This is the prefix-cache offload path.
+  - `kv_producer` / `kv_consumer`: **true mid-request disaggregation** (vLLM-native
+    P/D). A router mints a `transfer_id` per request and threads it through
+    `kv_transfer_params`: the prefill instance (producer, `do_remote_decode`)
+    offloads the request's KV under `qc-pd/{transfer_id}` and does no decode; the
+    decode instance (consumer, `do_remote_prefill`) pulls that KV by id and skips
+    prefill. The store is the rendezvous, so — unlike a direct RDMA-pull connector
+    — the producer frees its blocks immediately (no delay-free) and the consumer
+    loads synchronously. See src/pd_proxy.rs for the router that mints the id.
+
 Run it (see deploy/modal_vllm_connector.py for the full Modal recipe):
 
     vllm serve <model> \
@@ -97,8 +111,11 @@ class ReqMeta:
     slot_mapping: torch.Tensor
     # True = save (offload) this prefix; False = load it from the store.
     is_store: bool
-    # Canonical store-key prefix (identity + prompt-prefix hash), computed scheduler-side.
-    prefix_hash: str
+    # The store-key namespace for this op's layers + manifest. Either content-
+    # addressed (`qc/{identity-prefix-hash}`, for transparent prefix reuse) or
+    # disaggregation-handshake (`qc-pd/{transfer_id}`, for true mid-request P/D
+    # where a router-minted transfer_id — not the prompt content — names the KV).
+    key_prefix: str
 
     @staticmethod
     def make_meta(
@@ -106,7 +123,7 @@ class ReqMeta:
         block_ids: list[int],
         block_size: int,
         is_store: bool,
-        prefix_hash: str,
+        key_prefix: str,
     ) -> "ReqMeta":
         valid_num_tokens = align_to_block_size(len(token_ids), block_size)
         token_ids_tensor = torch.tensor(token_ids)[:valid_num_tokens]
@@ -122,7 +139,7 @@ class ReqMeta:
             token_ids=token_ids_tensor,
             slot_mapping=slot_mapping,
             is_store=is_store,
-            prefix_hash=prefix_hash,
+            key_prefix=key_prefix,
         )
 
 
@@ -136,10 +153,10 @@ class QuillCacheConnectorMetadata(KVConnectorMetadata):
         block_ids: list[int],
         block_size: int,
         is_store: bool,
-        prefix_hash: str,
+        key_prefix: str,
     ) -> None:
         self.requests.append(
-            ReqMeta.make_meta(token_ids, block_ids, block_size, is_store, prefix_hash)
+            ReqMeta.make_meta(token_ids, block_ids, block_size, is_store, key_prefix)
         )
 
 
@@ -180,10 +197,25 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
         self._segment_endpoints = dict(endpoints)
         self._replica_num = int(cfg.get_from_extra_config("replica_num", 1))
 
+        # Disaggregation role (vLLM KVTransferConfig.kv_role), using vLLM's own
+        # semantics: a pure prefill instance is `kv_producer` (saves a request's
+        # KV for a remote decode), a pure decode instance is `kv_consumer` (loads
+        # it), and `kv_both` is BOTH. The disagg handshake only fires when the
+        # router sets do_remote_* in kv_transfer_params; absent that, a kv_both
+        # instance falls through to single-pool, content-addressed reuse.
+        kv_role = getattr(cfg, "kv_role", None) or "kv_both"
+        self._is_producer = bool(getattr(cfg, "is_kv_producer", False))
+        self._is_consumer = bool(getattr(cfg, "is_kv_consumer", False))
+
         # Scheduler-side: requests for which a prefix hit was found and blocks
         # were allocated, so the worker must load them next forward pass.
         self._requests_need_load: dict[str, Request] = {}
-        # Worker-side: prefixes saved this step -> aligned token count (for manifest).
+        # Scheduler-side disagg handshake: req_id -> router-minted transfer_id.
+        # `_disagg_save` = producer must offload this prefill's KV under the id;
+        # `_disagg_load` = consumer must pull the KV named by the id (not content).
+        self._disagg_save: dict[str, str] = {}
+        self._disagg_load: dict[str, str] = {}
+        # Worker-side: key-prefixes saved this step -> aligned token count (for manifest).
         self._saved_this_step: dict[str, int] = {}
 
         # The worker owns byte movement; it registers the storage segments on the
@@ -196,8 +228,11 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
                     logger.info("segment %s mount skipped: %s", name, e)
 
         logger.info(
-            "QuillCacheV1Connector role=%s master=%s segments=%s identity=%s",
+            "QuillCacheV1Connector role=%s kv_role=%s(producer=%s consumer=%s) master=%s segments=%s identity=%s",
             role,
+            kv_role,
+            self._is_producer,
+            self._is_consumer,
             self._master.base,
             list(self._segment_endpoints),
             self._identity,
@@ -207,11 +242,21 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
     # Store primitives (the real QuillCache data path)
     # ==============================
 
-    def _layer_key(self, prefix_hash: str, layer_name: str) -> str:
-        return f"qc/{prefix_hash}/{layer_name}"
+    @staticmethod
+    def _content_prefix(prefix_hash: str) -> str:
+        """Key namespace for transparent, content-addressed prefix reuse."""
+        return f"qc/{prefix_hash}"
 
-    def _manifest_key(self, prefix_hash: str) -> str:
-        return f"qc/{prefix_hash}/__manifest__"
+    @staticmethod
+    def _pd_prefix(transfer_id: str) -> str:
+        """Key namespace for a disagg P/D handshake (router-minted transfer_id)."""
+        return f"qc-pd/{transfer_id}"
+
+    def _layer_key(self, key_prefix: str, layer_name: str) -> str:
+        return f"{key_prefix}/{layer_name}"
+
+    def _manifest_key(self, key_prefix: str) -> str:
+        return f"{key_prefix}/__manifest__"
 
     def _put_bytes(self, key: str, data: bytes) -> None:
         """Two-phase Put: allocate replica buffers, WRITE each, commit."""
@@ -305,16 +350,16 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
             if request.is_store:
                 continue
             logger.warning(
-                "QC loading %d tokens of KV from the store (prefix %s)",
+                "QC loading %d tokens of KV from the store (%s)",
                 len(request.slot_mapping),
-                request.prefix_hash[:12],
+                request.key_prefix,
             )
             for layer_name in forward_context.no_compile_layers:
                 layer = forward_context.no_compile_layers[layer_name]
                 kv_cache_layer = getattr(layer, "kv_cache", None)
                 if kv_cache_layer is None:
                     continue  # skip non-attention layers (MLP/MoE)
-                buf = self._get_bytes(self._layer_key(request.prefix_hash, layer_name))
+                buf = self._get_bytes(self._layer_key(request.key_prefix, layer_name))
                 if buf is None:
                     continue  # miss / evicted / refused — vLLM recomputes this layer
                 kv_cache = self._deserialize(buf, str(kv_cache_layer.device))
@@ -354,18 +399,22 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
             if not request.is_store:
                 continue
             kv_cache = extract_kv_from_layer(kv_layer, request.slot_mapping)
-            self._put_bytes(self._layer_key(request.prefix_hash, layer_name), self._serialize(kv_cache))
-            self._saved_this_step[request.prefix_hash] = int(request.token_ids.numel())
+            self._put_bytes(self._layer_key(request.key_prefix, layer_name), self._serialize(kv_cache))
+            self._saved_this_step[request.key_prefix] = int(request.token_ids.numel())
 
     def wait_for_save(self) -> None:
-        """Commit a manifest per saved prefix — the marker a later match check reads."""
-        for prefix_hash, num_tokens in self._saved_this_step.items():
+        """Commit a manifest per saved prefix — the marker a later match check reads.
+
+        For a disagg producer (`qc-pd/...`) the consumer pulls by transfer_id and
+        ignores the manifest, but writing it is harmless and keeps the save path
+        uniform (and records the token count for observability)."""
+        for key_prefix, num_tokens in self._saved_this_step.items():
             manifest = json.dumps({"tokens": num_tokens, "block_size": self._block_size}).encode()
-            self._put_bytes(self._manifest_key(prefix_hash), manifest)
+            self._put_bytes(self._manifest_key(key_prefix), manifest)
             logger.warning(
-                "QC committed %d-token prefix %s to the store",
+                "QC committed %d-token prefix to the store (%s)",
                 num_tokens,
-                prefix_hash[:12],
+                key_prefix,
             )
         self._saved_this_step.clear()
 
@@ -380,9 +429,30 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
     ) -> tuple[int | None, bool]:
         """How many *additional* prefix tokens the store can serve for this request."""
         token_ids = list(request.prompt_token_ids or [])
+
+        # --- disagg consumer (decode side): the router told us this request's
+        # prefill was done remotely (`do_remote_prefill`) and named the KV with a
+        # `transfer_id`. Claim the whole block-aligned prefix by id — no content
+        # match, no manifest lookup; the producer guarantees it's in the store. ---
+        params = request.kv_transfer_params or {}
+        if self._is_consumer and params.get("do_remote_prefill"):
+            transfer_id = params.get("transfer_id")
+            aligned = align_to_block_size(len(token_ids), self._block_size)
+            count = aligned - num_computed_tokens
+            if transfer_id and count > 0:
+                self._disagg_load[request.request_id] = str(transfer_id)
+                logger.warning(
+                    "QC disagg consumer: pull %d tokens for transfer_id=%s (req=%s)",
+                    count,
+                    transfer_id,
+                    getattr(request, "request_id", "?"),
+                )
+                return count, False
+            return 0, False
+
         mm_hashes = [f.identifier for f in request.mm_features]
         prefix_hash, aligned = _prefix_hash(token_ids, self._block_size, mm_hashes)
-        exists = self._exists(self._manifest_key(prefix_hash))
+        exists = self._exists(self._manifest_key(self._content_prefix(prefix_hash)))
         logger.warning(
             "QC match-check req=%s prefix=%s manifest=%s num_computed=%d aligned=%d block_size=%d ntok=%d",
             getattr(request, "request_id", "?"),
@@ -406,6 +476,16 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
     def update_state_after_alloc(
         self, request: "Request", blocks: "KVCacheBlocks", num_external_tokens: int
     ) -> None:
+        # --- disagg producer (prefill side): the router asked us to make this
+        # request's KV available for a remote decode (`do_remote_decode`) under a
+        # `transfer_id`. Remember it so build_connector_meta emits a save op. ---
+        params = request.kv_transfer_params or {}
+        if self._is_producer and params.get("do_remote_decode"):
+            transfer_id = params.get("transfer_id")
+            if transfer_id:
+                self._disagg_save[request.request_id] = str(transfer_id)
+            else:
+                logger.warning("QC disagg producer: do_remote_decode with no transfer_id")
         if num_external_tokens > 0:
             self._requests_need_load[request.request_id] = request
 
@@ -414,26 +494,52 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
         total_need_load = 0
 
         for new_req in scheduler_output.scheduled_new_reqs:
-            token_ids = new_req.prompt_token_ids or []
-            mm_hashes = [f.identifier for f in new_req.mm_features]
-            prefix_hash, _ = _prefix_hash(list(token_ids), self._block_size, mm_hashes)
-            if new_req.req_id in self._requests_need_load:
+            token_ids = list(new_req.prompt_token_ids or [])
+            req_id = new_req.req_id
+
+            # --- disagg producer: offload this prefill's KV under transfer_id. ---
+            if req_id in self._disagg_save:
                 meta.add_request(
-                    token_ids=list(token_ids),
-                    block_ids=new_req.block_ids[0],
-                    block_size=self._block_size,
-                    is_store=False,
-                    prefix_hash=prefix_hash,
-                )
-                total_need_load += 1
-            elif not self._exists(self._manifest_key(prefix_hash)):
-                # Not already in the store -> save this prefix after the forward.
-                meta.add_request(
-                    token_ids=list(token_ids),
+                    token_ids=token_ids,
                     block_ids=new_req.block_ids[0],
                     block_size=self._block_size,
                     is_store=True,
-                    prefix_hash=prefix_hash,
+                    key_prefix=self._pd_prefix(self._disagg_save[req_id]),
+                )
+                continue
+
+            # --- disagg consumer: pull the KV named by transfer_id, skip prefill. ---
+            if req_id in self._disagg_load:
+                meta.add_request(
+                    token_ids=token_ids,
+                    block_ids=new_req.block_ids[0],
+                    block_size=self._block_size,
+                    is_store=False,
+                    key_prefix=self._pd_prefix(self._disagg_load[req_id]),
+                )
+                total_need_load += 1
+                continue
+
+            # --- content-addressed reuse (single-pool / kv_both default). ---
+            mm_hashes = [f.identifier for f in new_req.mm_features]
+            prefix_hash, _ = _prefix_hash(token_ids, self._block_size, mm_hashes)
+            if req_id in self._requests_need_load:
+                meta.add_request(
+                    token_ids=token_ids,
+                    block_ids=new_req.block_ids[0],
+                    block_size=self._block_size,
+                    is_store=False,
+                    key_prefix=self._content_prefix(prefix_hash),
+                )
+                total_need_load += 1
+            elif not self._exists(self._manifest_key(self._content_prefix(prefix_hash))):
+                # Not already in the store -> save this prefix after the forward.
+                meta.add_request(
+                    token_ids=token_ids,
+                    block_ids=new_req.block_ids[0],
+                    block_size=self._block_size,
+                    is_store=True,
+                    key_prefix=self._content_prefix(prefix_hash),
                 )
 
         cached_reqs = scheduler_output.scheduled_cached_reqs
@@ -447,18 +553,46 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
             request = self._requests_need_load[req_id]
             total_tokens = num_computed_tokens + num_new_tokens
             token_ids = request.all_token_ids[:total_tokens]
-            mm_hashes = [f.identifier for f in request.mm_features]
-            prefix_hash, _ = _prefix_hash(list(token_ids), self._block_size, mm_hashes)
             assert new_block_ids is not None
+            # A resumed disagg consumer keeps its transfer_id key; otherwise content.
+            if req_id in self._disagg_load:
+                key_prefix = self._pd_prefix(self._disagg_load[req_id])
+            else:
+                mm_hashes = [f.identifier for f in request.mm_features]
+                prefix_hash, _ = _prefix_hash(list(token_ids), self._block_size, mm_hashes)
+                key_prefix = self._content_prefix(prefix_hash)
             meta.add_request(
                 token_ids=list(token_ids),
                 block_ids=new_block_ids[0],
                 block_size=self._block_size,
                 is_store=False,
-                prefix_hash=prefix_hash,
+                key_prefix=key_prefix,
             )
             total_need_load += 1
 
         assert total_need_load == len(self._requests_need_load)
         self._requests_need_load.clear()
+        self._disagg_save.clear()
+        self._disagg_load.clear()
         return meta
+
+    def request_finished(
+        self,
+        request: "Request",
+        block_ids: tuple[list[int], ...],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Disagg producer: confirm the handshake back to the router.
+
+        The prefill's KV is durably in the store (committed during wait_for_save),
+        so we DON'T delay-free the prefill blocks (`False`) — unlike a direct
+        RDMA-pull connector that must hold blocks until the decode side reads
+        them. We return the handshake (`do_remote_prefill` + `transfer_id`) so a
+        router that relays the response's kv_transfer_params can route the decode.
+        """
+        params = request.kv_transfer_params or {}
+        if self._is_producer and params.get("do_remote_decode") and params.get("transfer_id"):
+            return False, {
+                "do_remote_prefill": True,
+                "transfer_id": params["transfer_id"],
+            }
+        return False, None

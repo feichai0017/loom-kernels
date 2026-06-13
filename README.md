@@ -114,13 +114,17 @@ how far each piece is integrated:
   is offloaded to the store and **reused** on a later request
   (`deploy/modal_vllm_connector.py`), and — **disaggregated** — prefill on GPU 0 →
   store → decode on GPU 1, KV computed on one instance reused by another over the
-  transfer engine (`deploy/modal_vllm_pd.py`). The store is the same identity-guarded
-  `MasterService`; the local (no-GPU) form is `cargo run -- pd`.
+  transfer engine (`deploy/modal_vllm_pd.py`). This includes **true vLLM-native P/D**
+  (`deploy/modal_vllm_disagg.py`): prefill as `kv_producer`, decode as `kv_consumer`,
+  and `pd-proxy` as the router minting a `transfer_id` for vLLM's `kv_transfer_params`
+  handshake — the consumer pulls the producer's KV *by id* and skips prefill, with
+  output matching a monolithic run token-for-token. The store is the same
+  identity-guarded `MasterService`; the local (no-GPU) form is `cargo run -- pd`.
 - **⊙ reserved / needs hardware** — `RdmaTransport` / `NvlinkTransport` (behind
   `rdma` / `nvlink`): GPUDirect-RDMA / NVLink *zero-copy* needs a NIC / multi-GPU.
   Real interfaces, stubbed so the default build stays hardware-free.
 
-`cargo test` — 73 tests pass; `cargo fmt --check` and `cargo clippy` are clean. The
+`cargo test` — 79 tests pass; `cargo fmt --check` and `cargo clippy` are clean. The
 CUDA paths add 2 GPU tests (`#[ignore]`, L4-verified) and a `--features cuda`
 compile-check job in CI.
 
