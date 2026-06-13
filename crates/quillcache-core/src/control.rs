@@ -80,6 +80,17 @@ pub struct RequestPlan {
     pub actions: Vec<PlanAction>,
 }
 
+/// The control plane's admission decision (Mooncake's overload-oriented early
+/// rejection): admit with a plan, or reject when the SLO can't be met.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AdmissionDecision {
+    Admit(Box<RequestPlan>),
+    Reject {
+        reason: String,
+        best_slo_violation_us: u64,
+    },
+}
+
 /// The prefill → decode KV handoff a disaggregated plan implies (Mooncake's P/D
 /// data path): the freshly-prefilled blocks the `prefill_worker` computes and
 /// publishes to the store, which the `decode_worker` then reads over the
@@ -261,6 +272,10 @@ pub struct ControlPlane {
     conductor: Conductor,
     use_conductor: bool,
     cost_model: CostModel,
+    /// Overload admission: reject a request if the best worker would still
+    /// violate its SLO by more than this many microseconds. `None` admits all
+    /// (Mooncake's overload-oriented early rejection).
+    max_slo_violation_us: Option<u64>,
 }
 
 impl ControlPlane {
@@ -300,6 +315,7 @@ impl ControlPlane {
             conductor: Conductor::new(),
             use_conductor: false,
             cost_model: CostModel::default(),
+            max_slo_violation_us: None,
         }
     }
 
@@ -310,6 +326,33 @@ impl ControlPlane {
     pub fn with_conductor_routing(mut self, on: bool) -> Self {
         self.use_conductor = on;
         self
+    }
+
+    /// Enable overload admission: reject a request when even the best worker
+    /// would violate its SLO by more than `max_violation_us` (Mooncake's
+    /// overload-oriented early rejection). Off by default (admit all).
+    pub fn with_admission_slo_limit(mut self, max_violation_us: u64) -> Self {
+        self.max_slo_violation_us = Some(max_violation_us);
+        self
+    }
+
+    /// Plan the request, then either admit it or **reject it early** if even the
+    /// best worker would violate the SLO past the configured limit (overload).
+    /// With no limit set, always admits.
+    pub fn admit(&self, request: &RequestShape) -> Result<AdmissionDecision, ControlError> {
+        let plan = self.plan(request)?;
+        if let Some(limit) = self.max_slo_violation_us {
+            if plan.route.slo_violation_us > limit {
+                return Ok(AdmissionDecision::Reject {
+                    reason: format!(
+                        "overloaded: best worker '{}' would violate SLO by {}us (limit {}us)",
+                        plan.route.worker_id, plan.route.slo_violation_us, limit
+                    ),
+                    best_slo_violation_us: plan.route.slo_violation_us,
+                });
+            }
+        }
+        Ok(AdmissionDecision::Admit(Box::new(plan)))
     }
 
     /// The request's `ModelContext` + its prefix-inclusive block hashes — the
@@ -1215,5 +1258,49 @@ mod tests {
         let plan = control.plan(&request).unwrap();
         assert_eq!(plan.mode, ServingMode::Aggregated);
         assert!(plan.kv_handoff().is_none());
+    }
+
+    #[test]
+    fn overload_admission_rejects_when_slo_cannot_be_met() {
+        let cold = RequestShape {
+            id: "r".to_string(),
+            model_id: "Qwen/Qwen3-0.6B".to_string(),
+            tokenizer_id: "Qwen/Qwen3-0.6B".to_string(),
+            adapter_id: None,
+            tenant_id: "tenant-a".to_string(),
+            session_id: None,
+            blocks: vec![KvBlockKey::new(
+                "Qwen/Qwen3-0.6B",
+                "Qwen/Qwen3-0.6B",
+                "tenant-a",
+                "root",
+                "cold",
+                0,
+                64,
+            )],
+            estimated_decode_tokens: 16,
+            // A zero TTFT/TPOT budget can't be met by any prefill.
+            slo: SloTarget {
+                ttft_ms: 0,
+                tpot_ms: 0,
+            },
+        };
+
+        // With a zero violation budget, the request is rejected early (overload).
+        let strict = ControlPlane::new(vec![engine()]).with_admission_slo_limit(0);
+        match strict.admit(&cold).unwrap() {
+            AdmissionDecision::Reject {
+                best_slo_violation_us,
+                ..
+            } => assert!(best_slo_violation_us > 0),
+            other => panic!("expected Reject, got {other:?}"),
+        }
+
+        // Default (no admission limit) admits the same request.
+        let lenient = ControlPlane::new(vec![engine()]);
+        assert!(matches!(
+            lenient.admit(&cold).unwrap(),
+            AdmissionDecision::Admit(_)
+        ));
     }
 }
