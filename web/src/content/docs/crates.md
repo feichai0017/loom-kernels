@@ -1,26 +1,28 @@
 ---
 title: Crates
-description: The nine crates that make up the QuillCache workspace, and what each does.
+description: The five crates that make up the QuillCache workspace, and what each does.
 ---
 
-QuillCache is a Cargo workspace. The CUDA crate is excluded from the default
-build (it needs an NVIDIA toolchain); everything else builds hardware-free.
+QuillCache is a Cargo workspace of **five crates**. The CUDA crate is excluded
+from the default build (it needs an NVIDIA toolchain); everything else builds
+hardware-free.
 
 | crate | role |
 | --- | --- |
-| `quillcache-gateway` | OpenAI-compatible gateway: proxy, streaming, decision headers, SLO goodput |
-| `quillcache-control` | control plane: `plan()` / `observe_placement` / `audit_reuse` |
-| `quillcache-router` | routing policies incl. `DynamoCostRouter` (+ greedy / SLO-aware / session / prefix-affinity / round-robin) |
-| `quillcache-core` | `KvBlockKey` identity, `CostModel`, the `IndexBackend` + `DataPlane` traits, and the ART-vs-LSM `bench` |
-| `quillcache-store` | `LocalKvStore` (crash-consistent byte pool), `StoreDataPlane` (tiers), `PooledStore`, `NodeRegistry` |
-| `quillcache-transfer` | transfer engine: `LocalTransfer` / `TcpTransfer` / `RdmaTransfer` (reserved) |
-| `quillcache-index-holt` | Holt (persistent ART) index backend |
-| `quillcache-index-rocksdb` | RocksDB (LSM) index backend |
-| `quillcache-cuda` | CUDA device tier: HBM↔host copies + FP8 quantize-on-offload (feature-gated, excluded from the workspace) |
+| `quillcache` (bin) | the OpenAI-compatible **gateway** (proxy · cache-aware routing · streaming · SLO), the local **cluster** demo, and `bench-index` |
+| `quillcache-core` | `KvBlockKey` / `IdentityScope` identity, `CostModel`, `ReuseViolation`; the `router` (incl. `DynamoCostRouter`), `control` plane, `DataPlane` + `IndexBackend` traits, the ART-vs-LSM `bench`, and the feature-gated `index_holt` / `index_rocksdb` backends |
+| `quillcache-transfer-engine` | faithful port of Mooncake's Transfer Engine: `TransferEngine` + `MultiTransport` + `Transport` (`tcp` real / `rdma` reserved) + `TransferMetadata` + `Topology` |
+| `quillcache-store` | faithful port of `mooncake-store`: `Client`, `MasterService`, `OffsetBufferAllocator`, `AllocationStrategy`, `Replica`, the crash-consistent `DiskTier`, plus `LocalKvStore` (byte pool) + `StoreDataPlane` (tiers) |
+| `quillcache-cuda` | CUDA device tier: HBM↔host copies + FP8 quantize-on-offload (feature-gated, excluded from the default workspace) |
 
-## The two seams
+The two index backends (`index_holt`, `index_rocksdb`) are **feature-gated modules
+inside `quillcache-core`**, off by default — `holt` is pure Rust; `rocksdb` pulls a
+C++/libclang toolchain — so the default build needs neither. They are not separate
+crates.
 
-Two traits make the system pluggable and testable:
+## The seams
+
+A few traits keep the system pluggable and testable:
 
 - **`IndexBackend`** (`quillcache-core`) — the residency index. Implementations:
   `MemoryIndex` (reference), Holt (persistent ART), RocksDB (LSM). The same trait
@@ -28,7 +30,9 @@ Two traits make the system pluggable and testable:
 - **`DataPlane`** (`quillcache-core`) — the KV byte tier manager. `StoreDataPlane`
   implements it over per-worker `LocalKvStore` byte pools, so `place()` moves
   real bytes between HBM/DRAM/SSD tiers.
-
-The **transfer engine** (`Transfer` trait) and the **node registry**
-(`NodeRegistry` trait) are the seams for the distributed read path: TCP today,
-RDMA reserved; an in-memory registry now, etcd pluggable behind the trait.
+- **`Transport`** (`quillcache-transfer-engine`) — the wire under the Transfer
+  Engine. `TcpTransport` moves bytes one-sidedly by `(segment, offset)` today;
+  `RdmaTransport` is reserved behind the same trait.
+- **`TransferMetadata`** (`quillcache-transfer-engine`) — segment / topology
+  discovery: `InMemoryMetadata` now, etcd / redis / http pluggable behind the
+  trait.

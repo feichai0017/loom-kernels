@@ -1,6 +1,6 @@
 ---
 title: Identity-safe reuse
-description: Why content-hash caches leak across tenants and adapters, and the identity guard that costs ~1.7%.
+description: Why content-hash caches leak across tenants and adapters, and the identity guard that refuses it — in memory, on disk, and at the master.
 ---
 
 A KV block's **content hash** is computed from its tokens, so the same tokens
@@ -16,8 +16,15 @@ must not:
 ## The guard
 
 QuillCache makes the reuse contract explicit. Every block carries an
-`IdentityScope` (model · tokenizer · adapter · tenant), and `LocalKvStore::get`
-serves a block only when the requester's identity matches:
+`IdentityScope` (model · tokenizer · adapter · tenant), and a block is served only
+when the requester's identity matches. The check is the same at **every** serving
+point:
+
+- **`LocalKvStore::get`** — the in-memory byte tier;
+- **`DiskTier::get`** — the durable on-disk tier (so the guard holds after a crash
+  and recovery, not just in RAM);
+- **`MasterService::get_replica_list`** — the metadata layer, which refuses a
+  cross-identity request *before* any bytes move over the transfer engine.
 
 ```rust
 pub fn get(&mut self, key: &KvBlockKey) -> Result<Bytes, StoreError> {
@@ -33,18 +40,16 @@ a prefix, a `tenant-b` request for the *same content* returns
 `x-quillcache-local-hits: 0` and `x-quillcache-reuse-refused: 2` — it refuses to
 serve tenant A's KV to tenant B, and says so.
 
-## Measured
+## Precise, not blunt
 
-On a collision-heavy workload (one popular prefix shared across many identities —
-the multi-tenant shared-system-prompt / shared-RAG case):
+The guard is keyed on identity, not content, so it is **precise**: a
+same-identity request still gets its cache hit — only a genuine cross-identity
+match (a different tenant / adapter / model / tokenizer for the same tokens) is
+refused. On the multi-tenant shared-system-prompt / shared-RAG case, where one
+popular prefix is shared across many identities, a naive content-hash cache would
+serve that prefix across all of them; the guard serves **zero** unsafe reuse while
+keeping every safe same-identity hit.
 
-| policy | content-hash hits | unsafe served | safe reuse kept |
-| --- | --- | --- | --- |
-| naive (content hash only) | 12400 | **12000 (96.8%)** | — |
-| **identity guard** | — | **0** | 4800 |
-
-The guard eliminates **all** unsafe reuse while preserving safe same-identity
-reuse. And it is precise, not blunt: on a realistic mostly-same-identity mix the
-overhead — forced recomputes as a fraction of all reuse work — drops to **1.7%**
-(it is only 47.8% on the adversarial all-collision case). Safety is near-free
-exactly where it matters.
+It is the **same guard** in memory (`LocalKvStore`), on disk (`DiskTier`), and at
+the master (`MasterService`) — and it still holds after a crash and recovery. This
+is QuillCache's addition; Mooncake's keys are identity-agnostic.
