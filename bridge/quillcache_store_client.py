@@ -101,6 +101,27 @@ class StoreMasterClient:
             "/v1/get_replica_list", {"key": key, "identity": identity_scope}
         )["replicas"]
 
+    # ---- batch APIs (Mooncake BatchPut / BatchGet — one round-trip for many
+    # keys; a prefix's layers offload/load as a batch instead of N calls) ----
+
+    def batch_put_start(self, items, replica_num=1):
+        # items: [(key, identity_scope, size), ...]  -> [[buffer, ...], ...]
+        payload = [{"key": k, "identity": i, "size": s} for (k, i, s) in items]
+        return self._post(
+            "/v1/batch_put_start", {"items": payload, "replica_num": replica_num}
+        )["buffers"]
+
+    def batch_put_end(self, keys):
+        return self._post("/v1/batch_put_end", {"keys": list(keys)})
+
+    def batch_get_replica_list(self, keys, identity_scope):
+        # -> [[replica, ...], ...] aligned with `keys`. Raises HTTPError 403 if the
+        # identity guard refuses (the whole batch is refused).
+        return self._post(
+            "/v1/batch_get_replica_list",
+            {"keys": list(keys), "identity": identity_scope},
+        )["replicas"]
+
     def remove(self, key, force=False):
         return self._post("/v1/remove", {"key": key, "force": force})
 

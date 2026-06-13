@@ -98,6 +98,43 @@ struct StateResp {
     dead_segments: Vec<String>,
 }
 
+// ---- batch APIs (Mooncake's BatchPut / BatchGet) ----
+
+#[derive(Deserialize)]
+struct BatchPutItem {
+    key: String,
+    identity: IdentityScope,
+    size: u64,
+}
+
+#[derive(Deserialize)]
+struct BatchPutStartReq {
+    items: Vec<BatchPutItem>,
+    #[serde(default)]
+    replica_num: Option<usize>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct BatchPutStartResp {
+    buffers: Vec<Vec<AllocatedBuffer>>,
+}
+
+#[derive(Deserialize)]
+struct BatchKeysReq {
+    keys: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct BatchGetReq {
+    keys: Vec<String>,
+    identity: IdentityScope,
+}
+
+#[derive(Serialize, Deserialize)]
+struct BatchGetResp {
+    replicas: Vec<Vec<Replica>>,
+}
+
 async fn mount(State(master): State<Shared>, Json(req): Json<MountReq>) -> Json<bool> {
     master.lock().unwrap().mount_segment(req.name, req.capacity);
     Json(true)
@@ -176,6 +213,51 @@ async fn heartbeat(
     Ok(Json(true))
 }
 
+async fn batch_put_start(
+    State(master): State<Shared>,
+    Json(req): Json<BatchPutStartReq>,
+) -> Result<Json<BatchPutStartResp>, (StatusCode, String)> {
+    let config = req
+        .replica_num
+        .map(ReplicateConfig::replicas)
+        .unwrap_or_default();
+    let items = req
+        .items
+        .into_iter()
+        .map(|i| (i.key, i.identity, i.size))
+        .collect();
+    let buffers = master
+        .lock()
+        .unwrap()
+        .batch_put_start(items, &config)
+        .map_err(http_err)?;
+    Ok(Json(BatchPutStartResp { buffers }))
+}
+
+async fn batch_put_end(
+    State(master): State<Shared>,
+    Json(req): Json<BatchKeysReq>,
+) -> Result<Json<bool>, (StatusCode, String)> {
+    master
+        .lock()
+        .unwrap()
+        .batch_put_end(&req.keys)
+        .map_err(http_err)?;
+    Ok(Json(true))
+}
+
+async fn batch_get_replica_list(
+    State(master): State<Shared>,
+    Json(req): Json<BatchGetReq>,
+) -> Result<Json<BatchGetResp>, (StatusCode, String)> {
+    let replicas = master
+        .lock()
+        .unwrap()
+        .batch_get_replica_list(&req.keys, &req.identity)
+        .map_err(http_err)?;
+    Ok(Json(BatchGetResp { replicas }))
+}
+
 async fn state(State(master): State<Shared>) -> Json<StateResp> {
     let master = master.lock().unwrap();
     Json(StateResp {
@@ -194,6 +276,9 @@ fn router(shared: Shared) -> Router {
         .route("/v1/put_end", post(put_end))
         .route("/v1/put_revoke", post(put_revoke))
         .route("/v1/get_replica_list", post(get_replica_list))
+        .route("/v1/batch_put_start", post(batch_put_start))
+        .route("/v1/batch_put_end", post(batch_put_end))
+        .route("/v1/batch_get_replica_list", post(batch_get_replica_list))
         .route("/v1/remove", post(remove))
         .route("/v1/heartbeat", post(heartbeat))
         .route("/v1/state", get(state))
@@ -369,5 +454,57 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn batch_put_then_batch_get_over_http() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let shared: Shared = Arc::new(Mutex::new(MasterService::new("random")));
+        tokio::spawn(async move { axum::serve(listener, router(shared)).await.unwrap() });
+        let base = format!("http://{addr}");
+        let http = reqwest::Client::new();
+        let id = serde_json::json!({"model_id":"m","tokenizer_id":"t","adapter_id":null,"tenant_id":"ten-a"});
+
+        http.post(format!("{base}/v1/mount"))
+            .json(&serde_json::json!({"name":"seg-0","capacity":65536}))
+            .send()
+            .await
+            .unwrap();
+
+        // Batch-allocate three keys in one call.
+        let started = http
+            .post(format!("{base}/v1/batch_put_start"))
+            .json(&serde_json::json!({
+                "items": [
+                    {"key":"a","identity":id,"size":64},
+                    {"key":"b","identity":id,"size":64},
+                    {"key":"c","identity":id,"size":64},
+                ],
+                "replica_num": 1
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert!(started.status().is_success());
+        let body: BatchPutStartResp = started.json().await.unwrap();
+        assert_eq!(body.buffers.len(), 3);
+
+        http.post(format!("{base}/v1/batch_put_end"))
+            .json(&serde_json::json!({"keys":["a","b","c"]}))
+            .send()
+            .await
+            .unwrap();
+
+        let got = http
+            .post(format!("{base}/v1/batch_get_replica_list"))
+            .json(&serde_json::json!({"keys":["a","b","c"],"identity":id}))
+            .send()
+            .await
+            .unwrap();
+        assert!(got.status().is_success());
+        let resp: BatchGetResp = got.json().await.unwrap();
+        assert_eq!(resp.replicas.len(), 3);
+        assert!(resp.replicas.iter().all(|r| r.len() == 1));
     }
 }
