@@ -3,20 +3,21 @@ title: Mooncake / Dynamo mapping
 description: Every Mooncake and NVIDIA Dynamo component, mapped to a QuillCache crate.
 ---
 
-QuillCache replicates the production reference designs piece by piece, then adds
-its differentiation on top. The concepts line up one-to-one — built small enough
-to read end-to-end and measure.
+QuillCache mirrors Mooncake's decomposition piece by piece, then adds its
+differentiation on top. The concepts line up one-to-one — built small enough to
+read end-to-end and measure.
 
-| Mooncake / NVIDIA Dynamo | QuillCache | Status |
+| Mooncake / Dynamo | QuillCache | Status |
 | --- | --- | --- |
-| Mooncake Store (pooled DRAM/SSD KV) | `LocalKvStore` + `PooledStore` | ✅ real bytes |
-| Mooncake Transfer Engine | `quillcache-transfer` | ✅ TCP / ⊙ RDMA reserved |
-| Conductor / scheduler | `quillcache-control` + router | ✅ |
+| Transfer Engine (`TransferEngine` + `Transport`) | `quillcache-transfer-engine` (`engine` + `transport::{tcp,rdma}`) | ✅ TCP / ⊙ RDMA reserved |
+| Store `Client` (`PutStart`/`PutEnd`/`Get`) | `DummyClient` / `RealClient` | ✅ end-to-end over the transfer engine |
+| Store `MasterService` (two-phase Put, eviction) | `MasterService` | ✅ replica alloc · lease eviction |
+| `BufferAllocator` + `AllocationStrategy` | `OffsetBufferAllocator` + `Random`/`FreeRatioFirst` | ✅ |
+| `TransferMetadata` (etcd/redis/http/p2p) | `MetadataBackend` (`InMemoryMetadata`) | ✅ / ⊙ etcd pluggable |
 | Dynamo KV-router cost function | `DynamoCostRouter` | ✅ reproduces the worked example |
 | Dynamo KVBM tiers (G1/G2/G3) | `StoreDataPlane` (HBM/DRAM/SSD) | ✅ moves real bytes |
 | Dynamo KV-Cache Indexer | residency index (Holt ART) | ✅ persistent |
-| Dynamo etcd / service discovery | `NodeRegistry` (`StaticRegistry`) | ✅ etcd pluggable |
-| — *(neither does this)* | **identity guard + crash-consistency** | 🎯 differentiation |
+| — *(neither does this)* | **identity guard + crash-consistent `DiskTier`** | 🎯 differentiation |
 
 ## The Dynamo cost function
 
@@ -35,9 +36,12 @@ Dynamo's own published worked example (costs 18 / 10 / 11 → pick worker 2).
 
 ## The distributed read path
 
-The pooled read mirrors Mooncake's Conductor → metadata → Transfer Engine flow:
+The store's read mirrors Mooncake's `Client` → `MasterService` → Transfer Engine
+flow:
 
-1. the residency index **locates** which nodes hold the block (`index.locate`);
-2. the `NodeRegistry` **resolves** a node id to its transfer address;
-3. the **transfer engine** fetches it; the block is admitted locally and served,
-   identity-guarded.
+1. the `Client` asks the `MasterService` for the block's replicas
+   (`get_replica_list`), which is **identity-guarded** — a cross-identity request
+   is refused with `ReuseViolation` *before* any bytes move;
+2. the reply names the holding **segment** and **offset** in registered memory;
+3. the **Transfer Engine** moves those bytes one-sidedly by `(segment, offset)`
+   (TCP today, RDMA reserved) — it transfers by location, never by key.

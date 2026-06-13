@@ -12,7 +12,16 @@ C++ toolchain.
 git clone https://github.com/feichai0017/quillcache
 cd quillcache
 cargo build
-cargo test          # 45 tests
+cargo test          # 60 tests
+```
+
+## The cluster demo — the Mooncake-faithful store
+
+A local multi-node demo on the faithful store: N storage-node transfer engines +
+a master + a client doing identity-guarded Put/Get over the transfer engine.
+
+```bash
+cargo run -- cluster --nodes 4 --requests 12
 ```
 
 ## The ART-vs-LSM storage study

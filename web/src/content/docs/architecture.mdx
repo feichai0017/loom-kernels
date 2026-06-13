@@ -1,33 +1,37 @@
 ---
 title: How it fits together
-description: Gateway, control plane, KV cache pool, distribution — and how a request flows.
+description: Gateway, control plane, the Mooncake-faithful store, and the transfer engine — and how a request flows.
 ---
 
 import ArchDiagram from "../../components/ArchDiagram.astro";
 
-QuillCache is the KV cache pool **and** the control plane. The engines run the
+QuillCache is the KV cache store **and** the control plane. The engines run the
 model and own the live HBM KV; QuillCache holds the offloaded KV bytes
-(DRAM / SSD), moves them between nodes, indexes where they live, and decides
-routing and reuse.
+(DRAM / SSD), moves them between nodes over the transfer engine, indexes where
+they live, and decides routing and reuse.
 
 <ArchDiagram />
 
 ## The layers
 
-- **Gateway** (`quillcache-gateway`) — an OpenAI-compatible proxy. It parses the
+- **Gateway** (`quillcache` bin) — an OpenAI-compatible proxy. It parses the
   request, derives block hashes, asks the control plane for a plan, streams the
   upstream response through, and attaches `x-quillcache-*` decision headers
   before the first token (so they don't add to TTFT).
-- **Control plane / Conductor** (`quillcache-control` + `quillcache-router`) —
+- **Control plane / Conductor** (`quillcache-core` — `control` + `router`) —
   picks a worker with the Dynamo cost function (cache-locality vs load), runs the
   identity guard, and reads/writes the residency index.
-- **KV cache pool / data plane** (`quillcache-store`) — `StoreDataPlane` manages
-  HBM/DRAM/SSD tiers and moves **real bytes** on demotion/eviction;
-  `LocalKvStore` is the byte pool, with a WAL-backed crash-consistent SSD tier.
-- **Distribution** (`quillcache-store` + `quillcache-transfer`) — `PooledStore`
-  serves a block locally or fetches it from the peer the residency index located,
-  resolving the address through the `NodeRegistry` and moving it over the transfer
-  engine.
+- **Store / data plane** (`quillcache-store`) — `StoreDataPlane` manages
+  HBM/DRAM/SSD tiers and moves **real bytes** on demotion/eviction; `LocalKvStore`
+  is the byte pool, with a WAL-backed crash-consistent `DiskTier`. The faithful
+  store sits here too: the two-phase-Put `Client`, the `MasterService` (replica
+  allocation, lease eviction, identity-guarded `get_replica_list`), and the
+  `OffsetBufferAllocator`.
+- **Transfer Engine** (`quillcache-transfer-engine`) — moves KV bytes
+  **one-sidedly** between registered memory by `(segment, offset)`, exactly like
+  Mooncake: a `TransferEngine` facade over `MultiTransport` (`TcpTransport` real /
+  `RdmaTransport` reserved), with `TransferMetadata` for segment / topology
+  discovery (in-memory now, etcd later). It transfers by location, never by key.
 
 ## A request, end to end
 
@@ -47,9 +51,10 @@ routing and reuse.
 6. **Stream** — the upstream body is forwarded chunk by chunk; the first chunk's
    arrival is timed against the request's SLO budget for live goodput.
 
-## Two seams keep it pluggable
+## The seams keep it pluggable
 
 - **`IndexBackend`** — the residency index (Memory / Holt-ART / RocksDB-LSM),
   compared in the [storage study](/storage-study/).
-- **`DataPlane`** + **`Transfer`** + **`NodeRegistry`** — the byte tiers, the
-  wire (TCP / RDMA), and node discovery (in-memory now, etcd later).
+- **`DataPlane`** — the byte tiers (`StoreDataPlane` over `LocalKvStore`).
+- **`Transport`** + **`TransferMetadata`** — the wire (`TcpTransport` /
+  `RdmaTransport`) and segment / topology discovery (in-memory now, etcd later).

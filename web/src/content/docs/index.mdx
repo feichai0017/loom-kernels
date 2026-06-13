@@ -19,28 +19,30 @@ import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 import ArchDiagram from "../../components/ArchDiagram.astro";
 
 <div class="qc-pills">
-  <span class="qc-pill">distributed KV byte pool</span>
-  <span class="qc-pill">DRAM / SSD tiers</span>
-  <span class="qc-pill">transfer engine · TCP / RDMA</span>
-  <span class="qc-pill">cross-node fetch</span>
+  <span class="qc-pill">faithful Mooncake-store port</span>
+  <span class="qc-pill">transfer engine · (segment, offset)</span>
+  <span class="qc-pill">TCP / RDMA reserved</span>
+  <span class="qc-pill">two-phase Put · MasterService</span>
   <span class="qc-pill">identity-safe reuse</span>
-  <span class="qc-pill">crash-consistent SSD</span>
+  <span class="qc-pill">crash-consistent DiskTier</span>
   <span class="qc-pill">persistent ART index</span>
   <span class="qc-pill">Dynamo cost router</span>
-  <span class="qc-pill">9 crates · MIT</span>
+  <span class="qc-pill">5 crates · MIT</span>
 </div>
 
-QuillCache sits beside real inference engines (vLLM, SGLang) and owns the KV
-cache as a resource — the byte pool, the transfer engine, the residency index,
-and the cache-aware control plane. It replicates the architecture of **NVIDIA
-Dynamo** and **Moonshot's Mooncake**, at a size one person can read end-to-end
-and measure. It does **not** run models — the CUDA tier moves and quantizes KV
-*bytes* (the data path), not inference compute.
+QuillCache is a **faithful Rust port of Moonshot's Mooncake store** — its
+component decomposition, code layout, and API mirrored module for module — with a
+**Dynamo**-style cache-aware routing gateway in front. It sits beside real
+inference engines (vLLM, SGLang) and owns the KV cache as a resource: the Transfer
+Engine, the store (`Client` / `MasterService` / `DiskTier`), the residency index,
+and the cache-aware control plane — at a size one person can read end-to-end and
+measure. It does **not** run models — the CUDA tier moves and quantizes KV *bytes*
+(the data path), not inference compute.
 
 ## Headline results
 
 Real code, no simulation — every number is measured against in-tree baselines.
-45 tests pass; `fmt` + `clippy` clean.
+60 tests pass; `fmt` + `clippy` clean.
 
 <div class="qc-statgrid">
   <div class="qc-stat">
@@ -54,24 +56,24 @@ Real code, no simulation — every number is measured against in-tree baselines.
     <div class="d">ART writes each record once; LSM rewrites through compaction. Measured from RocksDB's own stats, not assumed.</div>
   </div>
   <div class="qc-stat">
-    <div class="n">96.8%</div>
-    <div class="k">Unsafe reuse caught</div>
-    <div class="d">Of a naive content-hash cache's hits on a collision workload — cross-tenant leaks + cross-adapter/model errors. The guard serves 0.</div>
+    <div class="n">0 leaks</div>
+    <div class="k">Identity-guarded reuse</div>
+    <div class="d">A content-hash cache would serve cross-tenant + cross-adapter/model blocks; the guard refuses them with a <code>ReuseViolation</code> in memory, on disk, and at the master. Tested.</div>
   </div>
   <div class="qc-stat">
     <div class="n">crash-consistent</div>
-    <div class="k">Persistent SSD tier</div>
-    <div class="d">Object-first atomic publish + WAL: complete blocks recover, half-written / corrupted blocks dropped, no dangling pointers.</div>
+    <div class="k">Durable <code>DiskTier</code></div>
+    <div class="d">Object-first atomic publish + WAL: complete blocks recover, half-written / corrupted blocks dropped, no dangling pointers (Mooncake's pool is volatile).</div>
   </div>
   <div class="qc-stat">
     <div class="n">real KV bytes</div>
-    <div class="k">Distributed byte pool</div>
-    <div class="d">DRAM + SSD tiers that hold actual KV blocks, with index-located cross-node fetch over the transfer engine — verified over TCP.</div>
+    <div class="k">HBM / DRAM / SSD tiers</div>
+    <div class="d"><code>StoreDataPlane</code> over <code>LocalKvStore</code> holds actual KV blocks and moves them across tiers — wired online and measured.</div>
   </div>
   <div class="qc-stat">
-    <div class="n">1.7%</div>
-    <div class="k">Cost of safety</div>
-    <div class="d">Identity-guard overhead on a realistic, mostly-same-identity workload (47.8% only on the adversarial all-collision case).</div>
+    <div class="n">(segment, offset)</div>
+    <div class="k">Faithful Transfer Engine</div>
+    <div class="d">A module-for-module port of Mooncake's one-sided transfer: moves bytes by location between registered memory (TCP real, RDMA reserved), never by key.</div>
   </div>
 </div>
 
@@ -94,7 +96,7 @@ live, and decides routing and reuse.
   <LinkCard
     title="Architecture"
     href="/architecture/"
-    description="Gateway, control plane, KV cache pool, distribution — how a request flows."
+    description="Gateway, control plane, the store, the transfer engine — how a request flows."
   />
   <LinkCard
     title="ART vs LSM storage study"
@@ -104,7 +106,7 @@ live, and decides routing and reuse.
   <LinkCard
     title="Identity-safe reuse"
     href="/identity-safe-reuse/"
-    description="Why content-hash caches leak, and the guard that costs ~1.7%."
+    description="Why content-hash caches leak, and the guard that refuses it — in memory, on disk, and at the master."
   />
   <LinkCard
     title="Crash-consistent tier"

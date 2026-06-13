@@ -1,13 +1,14 @@
 ---
 title: Crash-consistent tier
-description: The SSD tier survives a restart with object-first atomic publish + a WAL — proven by test.
+description: A durable DiskTier survives a restart with object-first atomic publish + a WAL — proven by test.
 ---
 
-The SSD tier holds real KV bytes that should survive a restart, so it needs a
-durable, **crash-consistent** catalog. Mooncake's pool is mostly volatile DRAM
-(rebuilt on restart); QuillCache occupies the seam it leaves open — a durable,
-immediately-reusable persistent tier — using the same pattern as the author's
-NoKV distributed file system: **object-first atomic publish + a WAL**.
+The durable `DiskTier` holds real KV bytes (`Disk` replicas) that should survive a
+restart, so it needs a durable, **crash-consistent** catalog. Mooncake's pool is
+volatile DRAM (rebuilt on restart); QuillCache occupies the seam it leaves open —
+a durable, immediately-reusable persistent tier — backed by `LocalKvStore`'s SSD
+tier, using the same pattern as the author's NoKV distributed file system:
+**object-first atomic publish + a WAL**.
 
 ## How a block is committed
 
@@ -25,8 +26,11 @@ pointer to a deleted file.
 
 ## How recovery works
 
+On restart, `LocalKvStore::recover` rebuilds the `DiskTier`'s catalog from the
+WAL:
+
 ```text
-recover(dir):
+LocalKvStore::recover(dir):
   replay the WAL  -> the live commit set (last write per key wins)
   for each commit -> verify the file exists AND matches recorded length + CRC
                      pass -> re-enter the index

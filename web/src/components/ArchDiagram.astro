@@ -1,10 +1,10 @@
 ---
 // Theme-aware architecture diagram (uses Starlight CSS variables, so it adapts
-// to light/dark automatically). Layered: gateway -> control -> pool -> distribution.
+// to light/dark automatically). Layered: gateway -> control -> store -> transfer engine.
 ---
 
 <div class="qc-diagram">
-  <svg viewBox="0 0 720 372" role="img" aria-label="QuillCache layered architecture: gateway, control plane, KV cache pool, distribution, with external engines and a CUDA device tier" xmlns="http://www.w3.org/2000/svg" style="font-family: var(--sl-font);">
+  <svg viewBox="0 0 720 372" role="img" aria-label="QuillCache layered architecture: gateway, control plane, the Mooncake-faithful store, and the transfer engine, with external engines and a CUDA device tier" xmlns="http://www.w3.org/2000/svg" style="font-family: var(--sl-font);">
     <style>
       .qc-l { fill: var(--sl-color-bg); stroke: var(--sl-color-hairline); stroke-width: 1; }
       .qc-stripe { fill: var(--qc-coral); }
@@ -19,26 +19,26 @@
     <!-- gateway -->
     <rect class="qc-l" x="12" y="14" width="696" height="56" rx="12"></rect>
     <rect class="qc-stripe" x="12" y="14" width="5" height="56" rx="2.5"></rect>
-    <text class="qc-t" x="32" y="39">Gateway</text>
+    <text class="qc-t" x="32" y="39">Gateway / Conductor</text>
     <text class="qc-s" x="32" y="58">OpenAI-compatible proxy · streaming · decision headers · SLO goodput</text>
 
     <!-- control plane -->
     <rect class="qc-l" x="12" y="84" width="696" height="56" rx="12"></rect>
     <rect class="qc-stripe" x="12" y="84" width="5" height="56" rx="2.5"></rect>
-    <text class="qc-t" x="32" y="109">Control plane / Conductor</text>
+    <text class="qc-t" x="32" y="109">Control plane (quillcache-core)</text>
     <text class="qc-s" x="32" y="128">router (Dynamo cost fn) · identity guard · residency index (Holt ART / RocksDB / Memory)</text>
 
-    <!-- kv cache pool -->
+    <!-- store -->
     <rect class="qc-l" x="12" y="154" width="696" height="56" rx="12"></rect>
     <rect class="qc-stripe" x="12" y="154" width="5" height="56" rx="2.5"></rect>
-    <text class="qc-t" x="32" y="179">KV cache pool / data plane</text>
-    <text class="qc-s" x="32" y="198">StoreDataPlane: HBM/DRAM/SSD tiers (real bytes) · LocalKvStore: WAL crash-consistent SSD</text>
+    <text class="qc-t" x="32" y="179">Store (quillcache-store) — faithful Mooncake-store port</text>
+    <text class="qc-s" x="32" y="198">Client (two-phase Put) · MasterService (alloc · eviction · identity guard) · DiskTier (WAL) · StoreDataPlane HBM/DRAM/SSD</text>
 
-    <!-- distribution -->
+    <!-- transfer engine -->
     <rect class="qc-l" x="12" y="224" width="696" height="56" rx="12"></rect>
     <rect class="qc-stripe" x="12" y="224" width="5" height="56" rx="2.5"></rect>
-    <text class="qc-t" x="32" y="249">Distribution</text>
-    <text class="qc-s" x="32" y="268">PooledStore: cross-node fetch · NodeRegistry (etcd analogue) · Transfer: TCP / RDMA (reserved)</text>
+    <text class="qc-t" x="32" y="249">Transfer Engine (quillcache-transfer-engine)</text>
+    <text class="qc-s" x="32" y="268">one-sided (segment, offset) over registered memory · TCP real / RDMA reserved · TransferMetadata · Topology</text>
 
     <!-- connectors -->
     <line class="qc-arrow" x1="360" y1="70" x2="360" y2="84"></line>
