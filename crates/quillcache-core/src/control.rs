@@ -1,11 +1,14 @@
-use crate::router::{GreedyStatePlaneRouter, RouteDecision, RouterError, RoutingPolicy};
+use crate::router::{
+    plan_for_worker, GreedyStatePlaneRouter, RouteDecision, RouterError, RoutingPolicy,
+};
 use crate::{
-    BlockRemovedEvent, BlockStoredEvent, CacheResidency, CacheTier, DataPlane, DataPlaneAction,
-    DataPlaneUpdate, EngineEndpoint, EngineRole, ExternalKvBlockKey, IdentityScope, IndexBackend,
-    KvBlockKey, KvEvent, KvEventBatch, MemoryIndex, NoDataPlane, RequestShape, ReuseViolation,
-    WorkerState,
+    BlockRemovedEvent, BlockStoredEvent, CacheResidency, CacheTier, Conductor, CostModel,
+    DataPlane, DataPlaneAction, DataPlaneUpdate, EngineEndpoint, EngineRole, ExternalKvBlockKey,
+    IdentityScope, IndexBackend, KvBlockKey, KvCacheEvent, KvEvent, KvEventBatch, MemoryIndex,
+    ModelContext, NoDataPlane, RequestShape, ReuseViolation, WorkerState,
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::str::FromStr;
 use thiserror::Error;
 
@@ -214,6 +217,13 @@ pub struct ControlPlane {
     router: Box<dyn RoutingPolicy>,
     residency: Box<dyn IndexBackend>,
     data_plane: Box<dyn DataPlane>,
+    /// The Mooncake Conductor's prefix-cache index, fed by the same KV events +
+    /// inferred placement. When `use_conductor` is on, the worker pick comes from
+    /// [`Conductor::route`] (contiguous-prefix overlap → Dynamo cost) instead of
+    /// the residency-snapshot router; the per-block plan still uses residency.
+    conductor: Conductor,
+    use_conductor: bool,
+    cost_model: CostModel,
 }
 
 impl ControlPlane {
@@ -250,6 +260,113 @@ impl ControlPlane {
             router,
             residency,
             data_plane: Box::new(NoDataPlane),
+            conductor: Conductor::new(),
+            use_conductor: false,
+            cost_model: CostModel::default(),
+        }
+    }
+
+    /// Route via the Mooncake Conductor (the prefix-cache table + the Dynamo cost
+    /// function) instead of the residency-snapshot router. Off by default (the
+    /// residency router is unchanged); the gateway turns it on by config
+    /// (`conductor: true`).
+    pub fn with_conductor_routing(mut self, on: bool) -> Self {
+        self.use_conductor = on;
+        self
+    }
+
+    /// The request's `ModelContext` + its prefix-inclusive block hashes — the
+    /// Conductor's query key.
+    fn request_prefix(request: &RequestShape) -> (ModelContext, Vec<String>) {
+        let scope = IdentityScope {
+            model_id: request.model_id.clone(),
+            tokenizer_id: request.tokenizer_id.clone(),
+            adapter_id: request.adapter_id.clone(),
+            tenant_id: request.tenant_id.clone(),
+        };
+        let block_size = request.blocks.first().map_or(0, |block| block.token_count);
+        let prefix_hashes = request
+            .blocks
+            .iter()
+            .map(|block| block.block_hash.clone())
+            .collect();
+        (ModelContext::from_scope(&scope, block_size), prefix_hashes)
+    }
+
+    /// Pick a route: via the Conductor when enabled (its worker pick + the
+    /// residency-based per-block plan), else the residency-snapshot router.
+    fn decide(
+        &self,
+        request: &RequestShape,
+        route_workers: &[WorkerState],
+        residency: &[CacheResidency],
+    ) -> Result<RouteDecision, ControlError> {
+        if self.use_conductor {
+            let (ctx, prefix_hashes) = Self::request_prefix(request);
+            if let Some(worker_id) = self.conductor.route(&ctx, &prefix_hashes, route_workers) {
+                if let Some(target) = route_workers.iter().find(|w| w.id == worker_id) {
+                    let worker_by_id: HashMap<&str, &WorkerState> =
+                        route_workers.iter().map(|w| (w.id.as_str(), w)).collect();
+                    return Ok(plan_for_worker(
+                        &self.cost_model,
+                        request,
+                        target,
+                        &worker_by_id,
+                        residency,
+                    ));
+                }
+            }
+        }
+        self.router
+            .route(request, route_workers, residency)
+            .map_err(ControlError::from)
+    }
+
+    /// Feed the Conductor's prefix table from a KV-event batch (BlockStored +
+    /// AllBlocksCleared). Precise per-block removal from the Conductor is a
+    /// refinement — the residency index already handles precise eviction for the
+    /// per-block plan + the reuse audit; the prefix table refreshes on re-store /
+    /// clear.
+    fn feed_conductor(&mut self, batch: &KvEventBatch) {
+        let Some(engine) = self
+            .engines
+            .iter()
+            .find(|engine| engine.id == batch.engine_id)
+            .cloned()
+        else {
+            return;
+        };
+        for event in &batch.events {
+            match event {
+                KvEvent::BlockStored(stored) => {
+                    let scope = IdentityScope {
+                        model_id: batch
+                            .model_id
+                            .clone()
+                            .unwrap_or_else(|| engine.model_id.clone()),
+                        tokenizer_id: batch
+                            .tokenizer_id
+                            .clone()
+                            .unwrap_or_else(|| engine.tokenizer_id.clone()),
+                        adapter_id: batch.adapter_id.clone().or(stored.lora_name.clone()),
+                        tenant_id: batch
+                            .tenant_id
+                            .clone()
+                            .unwrap_or_else(|| engine.tenant_id.clone()),
+                    };
+                    self.conductor.observe(KvCacheEvent::BlockStored {
+                        ctx: ModelContext::from_scope(&scope, stored.block_size),
+                        prefix_hashes: stored.block_hashes.clone(),
+                        instance: engine.id.clone(),
+                    });
+                }
+                KvEvent::AllBlocksCleared => {
+                    self.conductor.observe(KvCacheEvent::InstanceGone {
+                        instance: engine.id.clone(),
+                    });
+                }
+                KvEvent::BlockRemoved(_) => {}
+            }
         }
     }
 
@@ -267,9 +384,7 @@ impl ControlPlane {
 
     pub fn route(&self, request: &RequestShape) -> Result<RouteDecision, ControlError> {
         let residency = self.residency.snapshot();
-        self.router
-            .route(request, &self.workers, &residency)
-            .map_err(ControlError::from)
+        self.decide(request, &self.workers, &residency)
     }
 
     pub fn plan(&self, request: &RequestShape) -> Result<RequestPlan, ControlError> {
@@ -294,10 +409,7 @@ impl ControlPlane {
         } else {
             decode_workers
         };
-        let route = self
-            .router
-            .route(request, &route_workers, &residency)
-            .map_err(ControlError::from)?;
+        let route = self.decide(request, &route_workers, &residency)?;
         let decode_worker_id = route.worker_id.clone();
         let decode_role = self
             .workers
@@ -406,11 +518,22 @@ impl ControlPlane {
                 actions.extend(self.mirror_data_plane_update(update));
             }
         }
+        // Mirror the inferred placement into the Conductor's prefix table so
+        // cache-aware routing learns from routing too (the floor; KV events refine).
+        let (ctx, prefix_hashes) = Self::request_prefix(request);
+        if !prefix_hashes.is_empty() {
+            self.conductor.observe(KvCacheEvent::BlockStored {
+                ctx,
+                prefix_hashes,
+                instance: engine_id.to_string(),
+            });
+        }
         actions
     }
 
     pub fn ingest(&mut self, batch: KvEventBatch) -> Result<IngestSummary, ControlError> {
         let mut summary = ingest_batch(self.residency.as_mut(), batch.clone(), &self.engines)?;
+        self.feed_conductor(&batch);
         if self.data_plane.name() != "none" {
             let update = self.apply_batch_to_data_plane(&batch)?;
             self.mirror_data_plane_update(update);
@@ -728,6 +851,67 @@ mod tests {
         let decision = control.route(&request).unwrap();
         assert_eq!(decision.worker_id, "vllm-b");
         assert_eq!(decision.local_hits.len(), 1);
+    }
+
+    #[test]
+    fn conductor_routing_picks_the_engine_with_the_cached_prefix() {
+        let mut control = ControlPlane::new(vec![
+            engine(),
+            EngineEndpoint {
+                id: "vllm-b".to_string(),
+                base_url: "http://127.0.0.1:8002".to_string(),
+                locality_domain: "local".to_string(),
+                ..engine()
+            },
+        ])
+        .with_conductor_routing(true);
+        // vllm-b reports (via a KV event) that it cached prefix block "h0" — this
+        // feeds the Conductor's prefix table.
+        control
+            .ingest(KvEventBatch {
+                engine_id: "vllm-b".to_string(),
+                ts_ms: None,
+                model_id: None,
+                tokenizer_id: None,
+                adapter_id: None,
+                tenant_id: None,
+                bytes_per_block: Some(1024),
+                events: vec![KvEvent::BlockStored(BlockStoredEvent {
+                    block_hashes: vec!["h0".to_string()],
+                    parent_block_hash: None,
+                    token_ids: vec![1],
+                    block_size: 1,
+                    medium: Some("gpu".to_string()),
+                    lora_name: None,
+                    group_idx: None,
+                    bytes_per_block: None,
+                })],
+            })
+            .unwrap();
+
+        let request = RequestShape {
+            id: "req-1".to_string(),
+            model_id: "Qwen/Qwen3-0.6B".to_string(),
+            tokenizer_id: "Qwen/Qwen3-0.6B".to_string(),
+            adapter_id: None,
+            tenant_id: "tenant-a".to_string(),
+            session_id: None,
+            blocks: vec![KvBlockKey::external_hash(ExternalKvBlockKey {
+                model_id: "Qwen/Qwen3-0.6B".to_string(),
+                tokenizer_id: "Qwen/Qwen3-0.6B".to_string(),
+                adapter_id: None,
+                tenant_id: "tenant-a".to_string(),
+                prefix_hash: "root".to_string(),
+                block_hash: "h0".to_string(),
+                block_index: 0,
+                token_count: 1,
+            })],
+            estimated_decode_tokens: 16,
+            slo: SloTarget::default(),
+        };
+        // The Conductor (prefix table fed by the KV event) routes to vllm-b.
+        let decision = control.route(&request).unwrap();
+        assert_eq!(decision.worker_id, "vllm-b");
     }
 
     #[test]
