@@ -168,10 +168,11 @@ def run_e2e():
         # 4) Evidence: connector log lines + store state.
         vllm_log = open("/tmp/vllm.log", errors="replace").read()
         markers = [
-            "QuillCacheV1Connector role",
-            "committed",
-            "external cache HIT",
-            "loading",
+            "QC match-check",
+            "QC committed",
+            "QC external cache HIT",
+            "QC loading",
+            "attn_metadata is None but load",
             "identity guard REFUSED",
         ]
         hits = {m: [l for l in vllm_log.splitlines() if m in l] for m in markers}
@@ -218,10 +219,10 @@ def main():
             print("   ", l.strip()[:160])
     print("\n--- store master /v1/state ---")
     print(json.dumps(res["store_state"], indent=2)[:1500])
-    save = res["connector_log_evidence"]["committed"]
-    load = res["connector_log_evidence"]["external cache HIT"]
-    verdict = "REAL end-to-end: store populated AND served via the connector" if (save and load) \
-        else "partial — see vllm_log_tail"
+    save = res["connector_log_evidence"]["QC committed"]
+    load = res["connector_log_evidence"]["QC loading"]
+    verdict = "REAL end-to-end: store populated AND reused via the connector" if (save and load) \
+        else "partial — see match-check trace + vllm_log_tail"
     print(f"\nVERDICT: {verdict}")
     if not (save and load):
         print("\n--- vllm log tail ---\n" + res["vllm_log_tail"])

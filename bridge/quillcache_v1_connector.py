@@ -291,16 +291,21 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
 
         metadata = self._get_connector_metadata()
         assert isinstance(metadata, QuillCacheConnectorMetadata)
+        n_load = sum(1 for r in metadata.requests if not r.is_store)
         attn_metadata = forward_context.attn_metadata
         if attn_metadata is None:
-            logger.warning("start_load_kv: attn_metadata is None")
+            if n_load:
+                logger.warning(
+                    "QC start_load_kv: attn_metadata is None but load_reqs=%d — load SKIPPED",
+                    n_load,
+                )
             return
 
         for request in metadata.requests:
             if request.is_store:
                 continue
-            logger.info(
-                "QuillCache: loading %d tokens of KV from the store (prefix %s)",
+            logger.warning(
+                "QC loading %d tokens of KV from the store (prefix %s)",
                 len(request.slot_mapping),
                 request.prefix_hash[:12],
             )
@@ -357,8 +362,8 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
         for prefix_hash, num_tokens in self._saved_this_step.items():
             manifest = json.dumps({"tokens": num_tokens, "block_size": self._block_size}).encode()
             self._put_bytes(self._manifest_key(prefix_hash), manifest)
-            logger.info(
-                "QuillCache: committed %d-token prefix %s to the store",
+            logger.warning(
+                "QC committed %d-token prefix %s to the store",
                 num_tokens,
                 prefix_hash[:12],
             )
@@ -377,11 +382,24 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
         token_ids = list(request.prompt_token_ids or [])
         mm_hashes = [f.identifier for f in request.mm_features]
         prefix_hash, aligned = _prefix_hash(token_ids, self._block_size, mm_hashes)
-        if aligned <= num_computed_tokens:
+        exists = self._exists(self._manifest_key(prefix_hash))
+        logger.warning(
+            "QC match-check req=%s prefix=%s manifest=%s num_computed=%d aligned=%d block_size=%d ntok=%d",
+            getattr(request, "request_id", "?"),
+            prefix_hash[:12],
+            exists,
+            num_computed_tokens,
+            aligned,
+            self._block_size,
+            len(token_ids),
+        )
+        if aligned <= num_computed_tokens or not exists:
             return 0, False
-        if not self._exists(self._manifest_key(prefix_hash)):
-            return 0, False
-        logger.info("QuillCache: external cache HIT for prefix %s", prefix_hash[:12])
+        logger.warning(
+            "QC external cache HIT prefix=%s (+%d tokens)",
+            prefix_hash[:12],
+            aligned - num_computed_tokens,
+        )
         # Synchronous load (we inject during the forward pass), so async=False.
         return aligned - num_computed_tokens, False
 
