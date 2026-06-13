@@ -16,10 +16,30 @@ use super::{LinkClass, TransferError, Transport};
 use async_trait::async_trait;
 use bytes::Bytes;
 
-#[derive(Debug, Default)]
-pub struct RdmaTransport;
+/// One-sided RoCE/IB RDMA transport. Holds the local device + GID index used to
+/// open queue-pairs; `read_remote`/`write_remote` connect to a remote
+/// [`serve_rdma_segment`] over a TCP side-channel and do one-sided RDMA READ /
+/// WRITE by `(addr + offset, rkey)`. Real under `--features rdma`; an
+/// `Unsupported` stub otherwise, so the default build needs no NIC.
+#[derive(Debug, Clone)]
+pub struct RdmaTransport {
+    pub device: String,
+    pub gid_index: u8,
+}
 
-const NEEDS_WIRING: &str = "RDMA Transport wiring (QP handshake/pool) is the next step; the one-sided verbs core is verified — see rdma::one_sided_roundtrip (build --features rdma)";
+impl Default for RdmaTransport {
+    fn default() -> Self {
+        // rxe0 / GID index 1 = RoCEv2 IPv4 on a SoftRoCE box; override for a NIC.
+        Self {
+            device: "rxe0".into(),
+            gid_index: 1,
+        }
+    }
+}
+
+#[cfg(not(feature = "rdma"))]
+const NEEDS_NIC: &str =
+    "RDMA needs --features rdma + an ibverbs device (a real NIC or SoftRoCE/rxe)";
 
 #[async_trait]
 impl Transport for RdmaTransport {
@@ -33,20 +53,50 @@ impl Transport for RdmaTransport {
 
     async fn read_remote(
         &self,
-        _endpoint: &str,
-        _offset: u64,
-        _length: u64,
+        endpoint: &str,
+        offset: u64,
+        length: u64,
     ) -> Result<Bytes, TransferError> {
-        Err(TransferError::Unsupported(NEEDS_WIRING))
+        #[cfg(feature = "rdma")]
+        {
+            let (ep, device, gid) = (endpoint.to_string(), self.device.clone(), self.gid_index);
+            let bytes = tokio::task::spawn_blocking(move || {
+                verbs::rdma_read(&ep, offset, length as usize, &device, gid)
+            })
+            .await
+            .map_err(|e| TransferError::Io(e.to_string()))?
+            .map_err(TransferError::Io)?;
+            Ok(Bytes::from(bytes))
+        }
+        #[cfg(not(feature = "rdma"))]
+        {
+            let _ = (endpoint, offset, length);
+            Err(TransferError::Unsupported(NEEDS_NIC))
+        }
     }
 
     async fn write_remote(
         &self,
-        _endpoint: &str,
-        _offset: u64,
-        _data: Bytes,
+        endpoint: &str,
+        offset: u64,
+        data: Bytes,
     ) -> Result<(), TransferError> {
-        Err(TransferError::Unsupported(NEEDS_WIRING))
+        #[cfg(feature = "rdma")]
+        {
+            let (ep, device, gid) = (endpoint.to_string(), self.device.clone(), self.gid_index);
+            tokio::task::spawn_blocking(move || {
+                verbs::rdma_write(&ep, offset, &data, &device, gid)
+            })
+            .await
+            .map_err(|e| TransferError::Io(e.to_string()))?
+            .map_err(TransferError::Io)?;
+            Ok(())
+        }
+        #[cfg(not(feature = "rdma"))]
+        {
+            let _ = (endpoint, offset, data);
+            Err(TransferError::Unsupported(NEEDS_NIC))
+        }
     }
 }
 
@@ -55,7 +105,7 @@ impl Transport for RdmaTransport {
 // =============================================================================
 
 #[cfg(feature = "rdma")]
-pub use verbs::one_sided_roundtrip;
+pub use verbs::{one_sided_roundtrip, rdma_read, rdma_write, serve_rdma_segment, RdmaSegment};
 
 #[cfg(feature = "rdma")]
 mod verbs {
@@ -379,6 +429,320 @@ mod verbs {
             Ok(back)
         }
     }
+
+    // ---- Cross-node transport: a registered segment served over a TCP
+    // side-channel QP handshake, and a client doing one-sided RDMA against it.
+    // Same verbs as one_sided_roundtrip, split across two ibv contexts that
+    // exchange QP identities + the segment's (addr, rkey) over TCP. ----
+
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    const PORT: u8 = 1;
+    const GID_INDEX: u8 = 1; // RoCEv2 IPv4 on rxe
+
+    fn access_flags() -> c_int {
+        (ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0
+            | ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0
+            | ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0) as c_int
+    }
+
+    /// Create an RC queue-pair on `pd` whose completions land in `cq`.
+    unsafe fn create_rc_qp(
+        pd: *mut ffi::ibv_pd,
+        cq: *mut ffi::ibv_cq,
+    ) -> Result<*mut ffi::ibv_qp, String> {
+        let mut ia: ffi::ibv_qp_init_attr = std::mem::zeroed();
+        ia.send_cq = cq;
+        ia.recv_cq = cq;
+        ia.qp_type = ffi::ibv_qp_type::IBV_QPT_RC;
+        ia.cap.max_send_wr = 16;
+        ia.cap.max_recv_wr = 16;
+        ia.cap.max_send_sge = 1;
+        ia.cap.max_recv_sge = 1;
+        let qp = ffi::ibv_create_qp(pd, &mut ia as *mut _);
+        if qp.is_null() {
+            return Err("ibv_create_qp failed".into());
+        }
+        Ok(qp)
+    }
+
+    // Wire: client→server = 24B {qpn(4) psn(4) gid(16)};
+    //       server→client = 24B endpoint + mr_addr(8) + rkey(4) + capacity(8) = 44B.
+    unsafe fn endpoint_to_bytes(ep: &QpEndpoint) -> [u8; 24] {
+        let mut b = [0u8; 24];
+        b[0..4].copy_from_slice(&ep.qpn.to_be_bytes());
+        b[4..8].copy_from_slice(&ep.psn.to_be_bytes());
+        b[8..24].copy_from_slice(&ep.gid.raw);
+        b
+    }
+    unsafe fn endpoint_from_bytes(b: &[u8]) -> QpEndpoint {
+        let qpn = u32::from_be_bytes(b[0..4].try_into().unwrap());
+        let psn = u32::from_be_bytes(b[4..8].try_into().unwrap());
+        let mut gid: ffi::ibv_gid = std::mem::zeroed();
+        gid.raw.copy_from_slice(&b[8..24]);
+        QpEndpoint { qpn, psn, gid }
+    }
+
+    /// A registered RAM segment served to RDMA clients (Mooncake's storage-node
+    /// segment, RDMA form): clients RDMA one-sidedly into/out of its MR by
+    /// `(addr, rkey)` — this node's CPU never touches the bytes.
+    pub struct RdmaSegment {
+        ctx: *mut ffi::ibv_context,
+        pd: *mut ffi::ibv_pd,
+        mr: *mut ffi::ibv_mr,
+        buf: *mut u8,
+        capacity: usize,
+        len: AtomicUsize,
+        gid: ffi::ibv_gid,
+    }
+    // The verbs objects + buffer are owned for the segment's lifetime and only
+    // mutated by the (one-sided) HCA + setup, so sharing across accept threads is
+    // sound for this usage.
+    unsafe impl Send for RdmaSegment {}
+    unsafe impl Sync for RdmaSegment {}
+
+    impl RdmaSegment {
+        /// Open `device` (e.g. "rxe0") and register `capacity` bytes of RAM as an
+        /// MR with remote read/write, ready to be RDMA'd by clients.
+        pub fn new(device: &str, capacity: usize) -> Result<Self, String> {
+            unsafe {
+                let ctx = open_device(Some(device))?;
+                let pd = ffi::ibv_alloc_pd(ctx);
+                if pd.is_null() {
+                    return Err("ibv_alloc_pd failed".into());
+                }
+                let gid = query_gid(ctx, PORT, GID_INDEX as c_int)?;
+                let mut boxed = vec![0u8; capacity].into_boxed_slice();
+                let buf = boxed.as_mut_ptr();
+                std::mem::forget(boxed); // freed in Drop via buf/capacity
+                let mr = ffi::ibv_reg_mr(pd, buf as *mut c_void, capacity, access_flags());
+                if mr.is_null() {
+                    return Err("ibv_reg_mr failed".into());
+                }
+                Ok(Self {
+                    ctx,
+                    pd,
+                    mr,
+                    buf,
+                    capacity,
+                    len: AtomicUsize::new(0),
+                    gid,
+                })
+            }
+        }
+
+        /// Preload bytes into the segment (local copy); returns the offset (0).
+        pub fn register(&self, data: &[u8]) -> Result<u64, String> {
+            if data.len() > self.capacity {
+                return Err("data exceeds segment capacity".into());
+            }
+            unsafe { ptr::copy_nonoverlapping(data.as_ptr(), self.buf, data.len()) };
+            self.len.store(data.len(), Ordering::SeqCst);
+            Ok(0)
+        }
+
+        /// Read bytes back from the segment's memory (what a client RDMA-wrote).
+        pub fn read(&self, offset: usize, len: usize) -> Result<Vec<u8>, String> {
+            if offset.checked_add(len).is_none_or(|e| e > self.capacity) {
+                return Err("read out of segment bounds".into());
+            }
+            let mut out = vec![0u8; len];
+            unsafe { ptr::copy_nonoverlapping(self.buf.add(offset), out.as_mut_ptr(), len) };
+            Ok(out)
+        }
+
+        /// Logical length (bytes preloaded via [`Self::register`]).
+        pub fn len(&self) -> usize {
+            self.len.load(Ordering::SeqCst)
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.len() == 0
+        }
+
+        /// Serve one client: exchange QP identities + the MR handle, connect the
+        /// RC QP, signal ready, then hold the QP alive while the client RDMAs
+        /// (until it closes the side-channel).
+        fn serve_one(&self, mut stream: TcpStream) -> Result<(), String> {
+            unsafe {
+                let cq = ffi::ibv_create_cq(self.ctx, 16, ptr::null_mut(), ptr::null_mut(), 0);
+                if cq.is_null() {
+                    return Err("ibv_create_cq failed".into());
+                }
+                let qp = create_rc_qp(self.pd, cq)?;
+
+                let mut cbuf = [0u8; 24];
+                stream.read_exact(&mut cbuf).map_err(|e| e.to_string())?;
+                let client = endpoint_from_bytes(&cbuf);
+
+                let server = QpEndpoint {
+                    qpn: (*qp).qp_num,
+                    psn: 0,
+                    gid: self.gid,
+                };
+                let mut sbuf = [0u8; 44];
+                sbuf[0..24].copy_from_slice(&endpoint_to_bytes(&server));
+                sbuf[24..32].copy_from_slice(&(self.buf as u64).to_be_bytes());
+                sbuf[32..36].copy_from_slice(&(*self.mr).rkey.to_be_bytes());
+                sbuf[36..44].copy_from_slice(&(self.capacity as u64).to_be_bytes());
+                stream.write_all(&sbuf).map_err(|e| e.to_string())?;
+
+                connect_qp(qp, 0, &client, PORT, GID_INDEX)?;
+                stream.write_all(&[1u8]).map_err(|e| e.to_string())?; // "ready"
+
+                // Block until the client signals done / closes — its one-sided
+                // RDMA runs against our MR meanwhile, with no CPU of ours involved.
+                let mut done = [0u8; 1];
+                let _ = stream.read(&mut done);
+
+                ffi::ibv_destroy_qp(qp);
+                ffi::ibv_destroy_cq(cq);
+                Ok(())
+            }
+        }
+    }
+
+    impl Drop for RdmaSegment {
+        fn drop(&mut self) {
+            unsafe {
+                ffi::ibv_dereg_mr(self.mr);
+                ffi::ibv_dealloc_pd(self.pd);
+                ffi::ibv_close_device(self.ctx);
+                drop(Box::from_raw(std::slice::from_raw_parts_mut(
+                    self.buf,
+                    self.capacity,
+                )));
+            }
+        }
+    }
+
+    /// Serve an [`RdmaSegment`] to clients on `listener` (one QP per connection).
+    pub fn serve_rdma_segment(segment: Arc<RdmaSegment>, listener: TcpListener) {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { return };
+            let segment = segment.clone();
+            std::thread::spawn(move || {
+                let _ = segment.serve_one(stream);
+            });
+        }
+    }
+
+    /// One client-side one-sided RDMA op against a remote [`RdmaSegment`]: TCP
+    /// handshake to learn the server QP + `(addr, rkey)`, connect our RC QP, then
+    /// RDMA `opcode` between `buf` and `(server_addr + offset, rkey)`.
+    fn client_op(
+        endpoint: &str,
+        offset: u64,
+        opcode: ffi::ibv_wr_opcode::Type,
+        buf: &mut [u8],
+        device: &str,
+        gid_index: u8,
+    ) -> Result<(), String> {
+        let mut stream = TcpStream::connect(endpoint).map_err(|e| e.to_string())?;
+        unsafe {
+            let ctx = open_device(Some(device))?;
+            let pd = ffi::ibv_alloc_pd(ctx);
+            if pd.is_null() {
+                return Err("ibv_alloc_pd failed".into());
+            }
+            let gid = query_gid(ctx, PORT, gid_index as c_int)?;
+            let mr = ffi::ibv_reg_mr(
+                pd,
+                buf.as_mut_ptr() as *mut c_void,
+                buf.len(),
+                access_flags(),
+            );
+            if mr.is_null() {
+                return Err("ibv_reg_mr failed".into());
+            }
+            let cq = ffi::ibv_create_cq(ctx, 16, ptr::null_mut(), ptr::null_mut(), 0);
+            if cq.is_null() {
+                return Err("ibv_create_cq failed".into());
+            }
+            let qp = create_rc_qp(pd, cq)?;
+
+            let client = QpEndpoint {
+                qpn: (*qp).qp_num,
+                psn: 0,
+                gid,
+            };
+            stream
+                .write_all(&endpoint_to_bytes(&client))
+                .map_err(|e| e.to_string())?;
+
+            let mut sbuf = [0u8; 44];
+            stream.read_exact(&mut sbuf).map_err(|e| e.to_string())?;
+            let server = endpoint_from_bytes(&sbuf[0..24]);
+            let server_addr = u64::from_be_bytes(sbuf[24..32].try_into().unwrap());
+            let server_rkey = u32::from_be_bytes(sbuf[32..36].try_into().unwrap());
+
+            connect_qp(qp, 0, &server, PORT, gid_index)?;
+
+            let mut ready = [0u8; 1];
+            stream.read_exact(&mut ready).map_err(|e| e.to_string())?;
+
+            let res = post_and_wait(
+                qp,
+                cq,
+                opcode,
+                buf.as_ptr() as u64,
+                (*mr).lkey,
+                buf.len() as u32,
+                server_addr + offset,
+                server_rkey,
+            );
+
+            let _ = stream.write_all(&[1u8]); // "done"
+            ffi::ibv_destroy_qp(qp);
+            ffi::ibv_destroy_cq(cq);
+            ffi::ibv_dereg_mr(mr);
+            ffi::ibv_dealloc_pd(pd);
+            ffi::ibv_close_device(ctx);
+            res
+        }
+    }
+
+    /// RDMA-WRITE `data` into the remote segment at `offset` (one-sided).
+    pub fn rdma_write(
+        endpoint: &str,
+        offset: u64,
+        data: &[u8],
+        device: &str,
+        gid_index: u8,
+    ) -> Result<(), String> {
+        let mut buf = data.to_vec();
+        client_op(
+            endpoint,
+            offset,
+            ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE,
+            &mut buf,
+            device,
+            gid_index,
+        )
+    }
+
+    /// RDMA-READ `len` bytes from the remote segment at `offset` (one-sided).
+    pub fn rdma_read(
+        endpoint: &str,
+        offset: u64,
+        len: usize,
+        device: &str,
+        gid_index: u8,
+    ) -> Result<Vec<u8>, String> {
+        let mut buf = vec![0u8; len];
+        client_op(
+            endpoint,
+            offset,
+            ffi::ibv_wr_opcode::IBV_WR_RDMA_READ,
+            &mut buf,
+            device,
+            gid_index,
+        )?;
+        Ok(buf)
+    }
 }
 
 #[cfg(all(test, feature = "rdma"))]
@@ -396,6 +760,46 @@ mod tests {
         assert_eq!(
             back, payload,
             "RDMA WRITE then READ must round-trip the bytes"
+        );
+    }
+
+    // The full Transport over the wire: a served `RdmaSegment` + the async
+    // `RdmaTransport` client — two ibv contexts handshaking over localhost TCP and
+    // moving bytes one-sidedly by (addr, rkey) over SoftRoCE. Run on a box with
+    // rxe up (see above): `cargo test -p quillcache-transfer-engine --features rdma
+    // -- --ignored`.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[ignore = "requires an ibverbs device (real NIC or SoftRoCE/rxe)"]
+    async fn rdma_transport_write_then_read_over_the_wire() {
+        use std::sync::Arc;
+        let segment = Arc::new(RdmaSegment::new("rxe0", 1 << 20).expect("RdmaSegment"));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind side-channel");
+        let endpoint = listener.local_addr().unwrap().to_string();
+        let server = segment.clone();
+        std::thread::spawn(move || serve_rdma_segment(server, listener));
+
+        let t = RdmaTransport::default(); // rxe0, gid index 1
+        let payload: Vec<u8> = (0..4096).map(|i| (i % 251) as u8).collect();
+
+        // Client RDMA-WRITEs into the server's segment (one-sided)...
+        t.write_remote(&endpoint, 0, Bytes::from(payload.clone()))
+            .await
+            .expect("write_remote");
+        // ...the server sees the bytes in its own MR (the WRITE truly landed)...
+        assert_eq!(
+            segment.read(0, 4096).unwrap(),
+            payload,
+            "RDMA WRITE landed in the served segment"
+        );
+        // ...and the client RDMA-READs them straight back.
+        let got = t
+            .read_remote(&endpoint, 0, 4096)
+            .await
+            .expect("read_remote");
+        assert_eq!(
+            &got[..],
+            &payload[..],
+            "write_remote then read_remote must round-trip over RDMA"
         );
     }
 }
