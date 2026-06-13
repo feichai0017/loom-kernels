@@ -63,7 +63,7 @@ differentiation on top:
 | Dynamo KV-router cost function | `DynamoCostRouter` | ✅ reproduces the worked example |
 | Dynamo KVBM tiers (G1 HBM / G2 host / G3 disk) | `StoreDataPlane` (DRAM/SSD) + `quillcache-cuda` (HBM G1 + FP8 quantize) | ✅ DRAM/SSD · ⊙ HBM (GPU box) |
 | Mooncake GPU data path (GPUDirect-RDMA · NVLink · GDS) | `rdma` / `nvlink` reserved transports | ⊙ needs a GPU / NIC |
-| Dynamo KV-Cache Indexer | residency index (Holt ART) | ✅ persistent |
+| Mooncake Conductor / Dynamo KV-Cache Indexer | `conductor` (`PrefixCacheTable` + `ModelContext` + `KVEventHandler`) + residency index (Holt ART) | ✅ longest-prefix overlap · persistent |
 | — *(neither does this)* | **identity guard + crash-consistent `DiskTier`** | 🎯 differentiation |
 
 ## Crates

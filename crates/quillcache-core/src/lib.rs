@@ -1,9 +1,24 @@
+//! `quillcache-core` — the shared data model and the cache-aware routing
+//! **Conductor**, organized to mirror the reference designs (Mooncake / Dynamo):
+//!
+//! - **identity + cost** — `KvBlockKey`, `IdentityScope` / `ReuseViolation` (the
+//!   identity guard), `CostModel`.
+//! - **Conductor** (Mooncake's OSS KV-cache indexer) — the `conductor` module:
+//!   `ModelContext` + `PrefixCacheTable` + `KVEventHandler`, queried by the
+//!   cache-aware `router` (`DynamoCostRouter` = the Dynamo KV-router cost fn).
+//! - **control plane** — `control` (`ControlPlane`) drives a request through the
+//!   router, the residency index, and the `DataPlane` seam.
+//! - **residency index** — the `IndexBackend` trait + `MemoryIndex`, with the
+//!   persistent ART / LSM backends as the feature-gated `index_holt` /
+//!   `index_rocksdb` modules (the ART-vs-LSM `bench` study).
+
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::str::FromStr;
 
 pub mod bench;
+pub mod conductor;
 pub mod control;
 pub mod router;
 
@@ -15,6 +30,7 @@ pub mod index_holt;
 #[cfg(feature = "rocksdb")]
 pub mod index_rocksdb;
 
+pub use conductor::{KVEventHandler, KvCacheEvent, ModelContext, PrefixCacheTable};
 pub use control::*;
 pub use router::*;
 
