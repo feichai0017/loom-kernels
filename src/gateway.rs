@@ -85,6 +85,11 @@ pub struct GatewayConfig {
     /// a Dynamo KVBM bridge.
     #[serde(default)]
     pub action_sink: Option<ActionSinkConfig>,
+    /// Route via the Mooncake Conductor (the prefix-cache table + the Dynamo cost
+    /// function), fed by the same KV events + inferred placement, instead of the
+    /// residency-snapshot router. Off by default.
+    #[serde(default)]
+    pub conductor: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -359,8 +364,10 @@ pub async fn run(config: GatewayConfig) -> Result<(), GatewayError> {
         .as_ref()
         .map(|sink| sink.snapshot().kind)
         .unwrap_or_else(|| "none".to_string());
+    let use_conductor = config.conductor.unwrap_or(false);
     let control = ControlPlane::with_index_and_policy(config.engines, index, policy)
-        .with_data_plane(data_plane);
+        .with_data_plane(data_plane)
+        .with_conductor_routing(use_conductor);
     tracing::info!(
         policy = %policy_name,
         index = %index_name,
@@ -1057,6 +1064,7 @@ mod tests {
             index_path: None,
             data_plane: None,
             action_sink: None,
+            conductor: None,
         };
         // No backend configured -> in-memory reference.
         assert_eq!(build_index(&base).name(), "memory");

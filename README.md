@@ -177,8 +177,10 @@ cargo run -- cluster --nodes 4 --requests 12
 cargo run --features "rocksdb holt" -- bench-index --backend holt
 cargo run --features "rocksdb holt" -- bench-index --backend rocksdb
 
-# Run the OpenAI-compatible gateway in front of real engines (optionally backed
-# by a persistent ART/Holt residency index that survives restarts: index: holt).
+# Run the OpenAI-compatible gateway in front of real engines. Options in the
+# config: a persistent ART/Holt residency index that survives restarts
+# (index: holt), and Conductor routing — the Mooncake prefix-cache table + the
+# Dynamo cost function (conductor: true).
 cargo run -- gateway --config examples/quillcache-gateway.yaml
 cargo run --features holt -- gateway --config examples/quillcache-gateway.yaml
 
