@@ -52,6 +52,7 @@ pub mod master_election;
 pub mod master_service;
 pub mod offset_allocator;
 pub mod replica;
+pub mod sharded_map;
 pub mod types;
 
 pub use allocation_strategy::{
@@ -67,6 +68,7 @@ pub use master_election::{Leadership, MasterElection};
 pub use master_service::{MasterService, MasterSnapshot, ObjectSnapshot, SegmentSnapshot};
 pub use offset_allocator::{Allocation, OffsetAllocator, OffsetBufferAllocator};
 pub use replica::{Replica, ReplicaData, ReplicaList, ReplicaStatus};
+pub use sharded_map::ShardedMap;
 pub use types::{ErrorCode, ObjectKey, ReplicaId, ReplicateConfig, SegmentName, Slice};
 
 // =====================================================================
