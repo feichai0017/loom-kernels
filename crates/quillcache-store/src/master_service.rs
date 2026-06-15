@@ -22,6 +22,7 @@ use crate::allocation_strategy::{create_allocation_strategy, AllocationStrategy}
 use crate::allocator::{AllocatedBuffer, BufferAllocator};
 use crate::count_min_sketch::CountMinSketch;
 use crate::offset_allocator::OffsetBufferAllocator;
+use crate::op_log::{OpLog, OpLogEntry};
 use crate::replica::{Replica, ReplicaData, ReplicaList, ReplicaStatus};
 use crate::sharded_map::ShardedMap;
 use crate::types::{ErrorCode, ObjectKey, ReplicaId, ReplicateConfig, SegmentName};
@@ -150,6 +151,10 @@ pub struct MasterService {
     /// Approximate per-key access frequency (Mooncake's CountMinSketch), bumped on
     /// every guarded read so eviction / promotion can favour hot keys.
     hotness: Mutex<CountMinSketch>,
+    /// Optional durable op-log (Mooncake's HA OpLog). When set, committed
+    /// mutations are appended + fsynced so the master can recover to the last op
+    /// (not just the last snapshot). `None` = no logging (the default).
+    oplog: Option<Mutex<OpLog>>,
 }
 
 impl MasterService {
@@ -169,11 +174,28 @@ impl MasterService {
             segment_heartbeat: Mutex::new(HashMap::new()),
             segment_ttl: AtomicU64::new(0),
             hotness: Mutex::new(CountMinSketch::default()),
+            oplog: None,
         }
     }
 
     fn segments(&self) -> std::sync::MutexGuard<'_, SegmentState> {
         self.segments.lock().expect("segments mutex poisoned")
+    }
+
+    /// Turn on durable op-logging to `path` (Mooncake's HA OpLog). Call during
+    /// construction, before the master is shared. Existing entries are kept; pair
+    /// with periodic snapshots for compaction.
+    pub fn enable_oplog(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        self.oplog = Some(Mutex::new(OpLog::open(path)?));
+        Ok(())
+    }
+
+    /// Append a committed mutation to the op-log if one is enabled (best effort —
+    /// the snapshot is the backstop). Locks only the op-log mutex (a leaf).
+    fn log_op(&self, entry: OpLogEntry) {
+        if let Some(oplog) = &self.oplog {
+            let _ = oplog.lock().expect("oplog mutex poisoned").append(&entry);
+        }
     }
 
     /// Advance the logical clock (drives leases + LRU without wall-clock, so
@@ -194,7 +216,8 @@ impl MasterService {
             .insert(name.clone(), self.clock.load(Ordering::Relaxed));
         self.segments()
             .allocators
-            .push(Box::new(OffsetBufferAllocator::new(name, capacity)));
+            .push(Box::new(OffsetBufferAllocator::new(name.clone(), capacity)));
+        self.log_op(OpLogEntry::SegmentMounted { name, capacity });
     }
 
     /// Unmount a segment: drop any replicas living on it (they become
@@ -220,6 +243,9 @@ impl MasterService {
             .lock()
             .expect("heartbeat mutex poisoned")
             .remove(name);
+        self.log_op(OpLogEntry::SegmentUnmounted {
+            name: name.to_string(),
+        });
         Ok(())
     }
 
@@ -334,13 +360,26 @@ impl MasterService {
     /// Phase 2: flip the object's replicas to `Complete` (readable). Single-object
     /// write — locks only this key's shard.
     pub fn put_end(&self, key: &str) -> Result<(), ErrorCode> {
-        self.objects.with_shard(key, |s| {
+        let logging = self.oplog.is_some();
+        let entry = self.objects.with_shard(key, |s| {
             let object = s.get_mut(key).ok_or(ErrorCode::ObjectNotFound)?;
             for replica in object.replicas.values_mut() {
                 replica.status = ReplicaStatus::Complete;
             }
-            Ok(())
-        })
+            // Build the durable entry while we hold the shard (cheap; only if the
+            // op-log is on). It is appended after the shard lock is released.
+            Ok::<_, ErrorCode>(logging.then(|| OpLogEntry::PutCommitted {
+                key: key.to_string(),
+                identity: object.identity.clone(),
+                replicas: object.replicas.values().cloned().collect(),
+                soft_pinned: object.soft_pinned,
+                hard_pinned: object.hard_pinned,
+            }))
+        })?;
+        if let Some(entry) = entry {
+            self.log_op(entry);
+        }
+        Ok(())
     }
 
     /// Abort an in-flight Put: free the allocation and drop the object.
@@ -596,6 +635,10 @@ impl MasterService {
             Some(_) => Ok(s.remove(key).expect("present")),
         })?;
         segs.free_replicas(&object.replicas);
+        drop(segs);
+        self.log_op(OpLogEntry::Removed {
+            key: key.to_string(),
+        });
         Ok(())
     }
 
@@ -746,6 +789,84 @@ impl MasterService {
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e:?}")))
     }
 
+    // ---- HA: op-log replay (Mooncake's OpLog recovery) ----
+
+    /// Recover a master by replaying an op-log from an empty start — Mooncake's
+    /// HA model (rebuild the state machine from the durable log). For snapshot +
+    /// log, [`Self::recover`] from the snapshot first, then apply the post-snapshot
+    /// log; this variant is the pure-log path.
+    pub fn recover_from_oplog(strategy: &str, path: impl AsRef<Path>) -> std::io::Result<Self> {
+        let master = MasterService::new(strategy);
+        for entry in OpLog::replay(path)? {
+            master.apply_op(entry).map_err(|e| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e:?}"))
+            })?;
+        }
+        Ok(master)
+    }
+
+    /// Apply one replayed [`OpLogEntry`] (recovery only — not itself logged).
+    fn apply_op(&self, entry: OpLogEntry) -> Result<(), ErrorCode> {
+        match entry {
+            OpLogEntry::SegmentMounted { name, capacity } => {
+                self.mount_segment(name, capacity);
+                Ok(())
+            }
+            OpLogEntry::SegmentUnmounted { name } => {
+                let _ = self.unmount_segment(&name);
+                Ok(())
+            }
+            OpLogEntry::Removed { key } => {
+                let mut segs = self.segments();
+                if let Some(object) = self.objects.with_shard(&key, |s| s.remove(&key)) {
+                    segs.free_replicas(&object.replicas);
+                }
+                Ok(())
+            }
+            OpLogEntry::PutCommitted {
+                key,
+                identity,
+                replicas,
+                soft_pinned,
+                hard_pinned,
+            } => {
+                let mut segs = self.segments();
+                for replica in &replicas {
+                    if let ReplicaData::Memory(buf) = &replica.data {
+                        let allocator = segs
+                            .allocators
+                            .iter_mut()
+                            .find(|a| a.segment_name() == buf.segment_name())
+                            .ok_or(ErrorCode::SegmentNotFound)?;
+                        if !allocator.reserve(buf.offset, buf.size) {
+                            return Err(ErrorCode::InvalidReplica);
+                        }
+                    }
+                    segs.next_replica_id = segs.next_replica_id.max(replica.id + 1);
+                }
+                let now = self.clock.load(Ordering::Relaxed);
+                let mut rlist = ReplicaList::new();
+                for replica in replicas {
+                    rlist.insert(replica.id, replica);
+                }
+                self.objects.with_shard(&key, |s| {
+                    s.insert(
+                        key.clone(),
+                        ObjectMetadata {
+                            replicas: rlist,
+                            identity,
+                            lease_until: 0,
+                            last_access: now,
+                            soft_pinned,
+                            hard_pinned,
+                        },
+                    );
+                });
+                Ok(())
+            }
+        }
+    }
+
     // ---- internals ----
 
     /// Allocate `replica_num` buffers of `size`; on segment exhaustion, evict the
@@ -810,6 +931,7 @@ impl MasterService {
             }
             if let Some(object) = self.objects.with_shard(&key, |s| s.remove(&key)) {
                 segs.free_replicas(&object.replicas);
+                self.log_op(OpLogEntry::Removed { key });
                 evicted += 1;
             }
         }
@@ -826,6 +948,7 @@ impl MasterService {
             }
             if let Some(object) = self.objects.with_shard(&key, |s| s.remove(&key)) {
                 segs.free_replicas(&object.replicas);
+                self.log_op(OpLogEntry::Removed { key });
                 evicted += 1;
             }
         }
@@ -1256,6 +1379,39 @@ mod tests {
         }
         assert_eq!(m.hotness("hot"), 5, "each guarded read bumps the sketch");
         assert_eq!(m.hotness("cold"), 0);
+    }
+
+    #[test]
+    fn recovers_state_by_replaying_the_oplog() {
+        let dir = std::env::temp_dir().join(format!("qc-master-oplog-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("master.oplog");
+        let _ = std::fs::remove_file(&path);
+        let id = scope("ten-a");
+        {
+            let mut m = MasterService::new("random");
+            m.enable_oplog(&path).unwrap();
+            m.mount_segment("seg-0", 1000);
+            m.put_start("keep".into(), id.clone(), 64, &ReplicateConfig::replicas(1))
+                .unwrap();
+            m.put_end("keep").unwrap();
+            m.put_start("gone".into(), id.clone(), 64, &ReplicateConfig::replicas(1))
+                .unwrap();
+            m.put_end("gone").unwrap();
+            m.remove("gone", true).unwrap();
+        }
+        // Rebuild purely from the log: segment re-mounted, "keep" durable + still
+        // identity-guarded, "gone" gone.
+        let r = MasterService::recover_from_oplog("random", &path).unwrap();
+        assert_eq!(r.segment_count(), 1);
+        assert!(r.exist_key("keep"));
+        assert!(!r.exist_key("gone"));
+        assert_eq!(r.get_replica_list("keep", &id).unwrap().len(), 1);
+        assert_eq!(
+            r.get_replica_list("keep", &scope("ten-b")),
+            Err(ErrorCode::UnsafeReuse(ReuseViolation::Tenant))
+        );
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
