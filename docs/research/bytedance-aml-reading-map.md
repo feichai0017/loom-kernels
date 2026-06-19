@@ -110,10 +110,12 @@ For each paper, answer these in the notes:
 
 ## Current Reading Order
 
-1. MegaScale-Infer: module-level disaggregation and ping-pong pipeline.
-2. Flux: fine-grained communication overlap.
-3. Comet: dependency-aware task rescheduling.
+1. MegaScale-Infer: module-level disaggregation and ping-pong pipeline. Done in
+   `docs/research/megascale-infer-notes.md`.
+2. Flux: fine-grained communication overlap. Done in
+   `docs/research/flux-comet-overlap-notes.md`.
+3. Comet: dependency-aware task rescheduling. Done in
+   `docs/research/flux-comet-overlap-notes.md`.
 4. CXL KV Cache: memory tiering under TTFT SLO.
 5. Prompt Leakage: safe reuse and identity governance.
 6. Mooncake + Dynamo/NIXL references: production serving and transfer baseline.
-

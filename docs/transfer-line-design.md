@@ -134,7 +134,9 @@ an out-of-order later layer cannot create a false early-start signal. Current
 gateway metrics accept these measurements through `/v1/transfer-telemetry` and
 prefer them over planner estimates in `TransferObservation`. The gateway also
 derives `overlap_efficiency_pct = overlap_window_us / full_transfer_us`, a direct
-signal for whether transfer is being hidden behind useful decode work.
+signal for whether transfer is being hidden behind useful decode work. It also
+derives `exposed_transfer_ms = full_transfer_ms - overlap_saved_ms`, the transfer
+time still visible to the serving critical path.
 
 `bridge/quillcache_v1_connector.py` posts the same telemetry automatically during
 real vLLM KV loads when `gateway_url` or `telemetry_url` is configured. It records

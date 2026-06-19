@@ -71,6 +71,7 @@ pub struct TransferObservation {
     pub time_to_first_layer_ms: Option<f64>,
     pub full_transfer_ms: Option<f64>,
     pub overlap_saved_ms: Option<f64>,
+    pub exposed_transfer_ms: Option<f64>,
     pub overlap_efficiency_pct: Option<f64>,
     pub queue_depth: u64,
     pub bandwidth_mbps: Option<f64>,

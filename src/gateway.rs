@@ -319,6 +319,10 @@ impl GatewayMetrics {
                 time_to_first_layer_ms: avg_us_to_ms(first_us, first_events),
                 full_transfer_ms: avg_us_to_ms(full_us, measured_events),
                 overlap_saved_ms: avg_us_to_ms(overlap_us, measured_events),
+                exposed_transfer_ms: avg_us_to_ms(
+                    full_us.saturating_sub(overlap_us),
+                    measured_events,
+                ),
                 overlap_efficiency_pct: overlap_efficiency_pct(overlap_us, full_us),
                 queue_depth: self.transfer_measured_queue_depth.load(Ordering::Relaxed),
                 bandwidth_mbps: bandwidth_mbps(bytes, full_us),
@@ -335,6 +339,7 @@ impl GatewayMetrics {
             time_to_first_layer_ms: Some(first_us as f64 / transfer_requests as f64 / 1_000.0),
             full_transfer_ms: Some(full_us as f64 / transfer_requests as f64 / 1_000.0),
             overlap_saved_ms: avg_us_to_ms(full_us.saturating_sub(first_us), transfer_requests),
+            exposed_transfer_ms: avg_us_to_ms(first_us.min(full_us), transfer_requests),
             overlap_efficiency_pct: overlap_efficiency_pct(
                 full_us.saturating_sub(first_us),
                 full_us,
@@ -366,6 +371,10 @@ impl GatewayMetrics {
             avg_time_to_first_layer_ms: avg_us_to_ms(first_us, first_events),
             avg_full_transfer_ms: avg_us_to_ms(full_us, measured_events),
             avg_overlap_window_ms: avg_us_to_ms(overlap_us, measured_events),
+            avg_exposed_transfer_ms: avg_us_to_ms(
+                full_us.saturating_sub(overlap_us),
+                measured_events,
+            ),
             overlap_efficiency_pct: overlap_efficiency_pct(overlap_us, full_us),
             latest_queue_depth: self.transfer_measured_queue_depth.load(Ordering::Relaxed),
             bandwidth_mbps: bandwidth_mbps(bytes, full_us),
@@ -429,6 +438,7 @@ pub struct TransferTelemetrySummary {
     pub avg_time_to_first_layer_ms: Option<f64>,
     pub avg_full_transfer_ms: Option<f64>,
     pub avg_overlap_window_ms: Option<f64>,
+    pub avg_exposed_transfer_ms: Option<f64>,
     pub overlap_efficiency_pct: Option<f64>,
     pub latest_queue_depth: u64,
     pub bandwidth_mbps: Option<f64>,
@@ -1635,6 +1645,7 @@ mod tests {
         assert_eq!(transfer.full_transfer_ms, Some(1.2));
         assert_eq!(transfer.time_to_first_layer_ms, Some(0.4));
         assert_eq!(transfer.overlap_saved_ms, Some(0.8));
+        assert_eq!(transfer.exposed_transfer_ms, Some(0.4));
         assert_eq!(transfer.overlap_efficiency_pct, Some(800.0 / 12.0));
     }
 
@@ -1681,6 +1692,7 @@ mod tests {
         assert_eq!(observation.time_to_first_layer_ms, Some(1.0));
         assert_eq!(observation.full_transfer_ms, Some(4.0));
         assert_eq!(observation.overlap_saved_ms, Some(3.0));
+        assert_eq!(observation.exposed_transfer_ms, Some(1.0));
         assert_eq!(observation.overlap_efficiency_pct, Some(75.0));
         assert_eq!(observation.queue_depth, 7);
         assert_eq!(observation.bandwidth_mbps, Some(2.0));
@@ -1693,6 +1705,7 @@ mod tests {
         assert_eq!(summary.avg_time_to_first_layer_ms, Some(1.0));
         assert_eq!(summary.avg_full_transfer_ms, Some(4.0));
         assert_eq!(summary.avg_overlap_window_ms, Some(3.0));
+        assert_eq!(summary.avg_exposed_transfer_ms, Some(1.0));
         assert_eq!(summary.overlap_efficiency_pct, Some(75.0));
         assert_eq!(summary.latest_queue_depth, 7);
         assert_eq!(summary.bandwidth_mbps, Some(2.0));
