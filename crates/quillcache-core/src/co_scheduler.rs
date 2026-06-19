@@ -71,6 +71,7 @@ pub struct TransferObservation {
     pub time_to_first_layer_ms: Option<f64>,
     pub full_transfer_ms: Option<f64>,
     pub overlap_saved_ms: Option<f64>,
+    pub overlap_efficiency_pct: Option<f64>,
     pub queue_depth: u64,
     pub bandwidth_mbps: Option<f64>,
 }
@@ -143,6 +144,7 @@ pub struct CoSchedulerPolicy {
     pub hbm_pressure_threshold_pct: f64,
     pub high_transfer_queue_depth: u64,
     pub time_to_first_layer_budget_ms: f64,
+    pub min_overlap_efficiency_pct: f64,
     pub target_hot_prefix_replicas: usize,
     pub min_hot_prefix_hits: u64,
 }
@@ -157,6 +159,7 @@ impl Default for CoSchedulerPolicy {
             hbm_pressure_threshold_pct: 90.0,
             high_transfer_queue_depth: 16,
             time_to_first_layer_budget_ms: 20.0,
+            min_overlap_efficiency_pct: 50.0,
             target_hot_prefix_replicas: 2,
             min_hot_prefix_hits: 8,
         }
@@ -356,7 +359,17 @@ impl CoScheduler {
             .map(|ms| ms > self.policy.time_to_first_layer_budget_ms)
             .unwrap_or(false);
         let queued = snapshot.transfer.queue_depth >= self.policy.high_transfer_queue_depth;
-        if !slow_first_layer && !queued {
+        let low_overlap_efficiency = match (
+            snapshot.transfer.overlap_efficiency_pct,
+            snapshot.transfer.full_transfer_ms,
+        ) {
+            (Some(efficiency), Some(full_transfer_ms)) => {
+                full_transfer_ms > self.policy.time_to_first_layer_budget_ms
+                    && efficiency < self.policy.min_overlap_efficiency_pct
+            }
+            _ => false,
+        };
+        if !slow_first_layer && !queued && !low_overlap_efficiency {
             return;
         }
         actions.push(CoSchedulerAction {
@@ -366,10 +379,12 @@ impl CoScheduler {
             source_worker_id: None,
             prefix_hash: None,
             tier: None,
-            value: Some("increase_layer_inflight_or_switch_backend".to_string()),
+            value: Some("prioritize_first_layer_or_switch_backend".to_string()),
             reason: format!(
-                "transfer pressure: first_layer={:?}ms queue_depth={}",
-                snapshot.transfer.time_to_first_layer_ms, snapshot.transfer.queue_depth
+                "transfer pressure: first_layer={:?}ms queue_depth={} overlap_efficiency={:?}%",
+                snapshot.transfer.time_to_first_layer_ms,
+                snapshot.transfer.queue_depth,
+                snapshot.transfer.overlap_efficiency_pct
             ),
         });
     }
@@ -611,5 +626,22 @@ mod tests {
             .actions
             .iter()
             .any(|action| action.kind == CoSchedulerActionKind::TuneTransferDepth));
+    }
+
+    #[test]
+    fn low_overlap_efficiency_tunes_depth() {
+        let scheduler = CoScheduler::default();
+        let mut snapshot = healthy_snapshot();
+        snapshot.transfer.time_to_first_layer_ms = Some(18.0);
+        snapshot.transfer.full_transfer_ms = Some(100.0);
+        snapshot.transfer.overlap_efficiency_pct = Some(20.0);
+
+        let plan = scheduler.dry_run(&snapshot);
+        let action = plan
+            .actions
+            .iter()
+            .find(|action| action.kind == CoSchedulerActionKind::TuneTransferDepth)
+            .expect("tune transfer depth");
+        assert!(action.reason.contains("overlap_efficiency=Some(20.0)%"));
     }
 }

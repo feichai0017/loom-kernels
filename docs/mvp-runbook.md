@@ -164,6 +164,11 @@ Then inspect `transfer_telemetry`:
 curl http://127.0.0.1:8080/v1/state | jq .transfer_telemetry
 ```
 
+The response includes `overlap_efficiency_pct`, derived as
+`overlap_window_us / full_transfer_us`. A high value means most of the transfer
+can run after layer 0 becomes consumable; a low value means the first consumable
+layer is still arriving too late for useful overlap.
+
 ## Current Limitations
 
 - Exact request-to-vLLM block matching requires client-provided block hints or a
