@@ -139,6 +139,18 @@ pub struct CoSchedulerConfig {
     /// admission control. `0` means reject any request predicted to miss SLO.
     #[serde(default = "default_admission_slo_violation_limit_us")]
     pub admission_slo_violation_limit_us: u64,
+    #[serde(default = "default_transfer_depth_initial")]
+    pub transfer_depth_initial: usize,
+    #[serde(default = "default_transfer_depth_min")]
+    pub transfer_depth_min: usize,
+    #[serde(default = "default_transfer_depth_max")]
+    pub transfer_depth_max: usize,
+    #[serde(default = "default_transfer_first_layer_budget_ms")]
+    pub transfer_first_layer_budget_ms: f64,
+    #[serde(default = "default_transfer_min_overlap_efficiency_pct")]
+    pub transfer_min_overlap_efficiency_pct: f64,
+    #[serde(default = "default_transfer_high_queue_depth")]
+    pub transfer_high_queue_depth: u64,
 }
 
 impl Default for CoSchedulerConfig {
@@ -146,6 +158,12 @@ impl Default for CoSchedulerConfig {
         Self {
             apply: default_co_scheduler_apply(),
             admission_slo_violation_limit_us: default_admission_slo_violation_limit_us(),
+            transfer_depth_initial: default_transfer_depth_initial(),
+            transfer_depth_min: default_transfer_depth_min(),
+            transfer_depth_max: default_transfer_depth_max(),
+            transfer_first_layer_budget_ms: default_transfer_first_layer_budget_ms(),
+            transfer_min_overlap_efficiency_pct: default_transfer_min_overlap_efficiency_pct(),
+            transfer_high_queue_depth: default_transfer_high_queue_depth(),
         }
     }
 }
@@ -156,6 +174,30 @@ fn default_co_scheduler_apply() -> bool {
 
 fn default_admission_slo_violation_limit_us() -> u64 {
     0
+}
+
+fn default_transfer_depth_initial() -> usize {
+    1
+}
+
+fn default_transfer_depth_min() -> usize {
+    1
+}
+
+fn default_transfer_depth_max() -> usize {
+    8
+}
+
+fn default_transfer_first_layer_budget_ms() -> f64 {
+    20.0
+}
+
+fn default_transfer_min_overlap_efficiency_pct() -> f64 {
+    50.0
+}
+
+fn default_transfer_high_queue_depth() -> u64 {
+    16
 }
 
 fn default_action_sink_kind() -> String {
@@ -492,6 +534,7 @@ pub struct CoSchedulerActuatorSnapshot {
     pub last_applied_epoch: u64,
     pub admission_reject_enabled: bool,
     pub admission_slo_violation_limit_us: Option<u64>,
+    pub transfer_max_inflight: usize,
     pub last_applied_actions: Vec<AppliedCoSchedulerAction>,
 }
 
@@ -500,15 +543,23 @@ struct CoSchedulerActuator {
     config: CoSchedulerConfig,
     last_applied_epoch: u64,
     admission_reject_enabled: bool,
+    transfer_max_inflight: usize,
     last_applied_actions: Vec<AppliedCoSchedulerAction>,
 }
 
 impl CoSchedulerActuator {
     fn new(config: Option<CoSchedulerConfig>) -> Self {
+        let config = config.unwrap_or_default();
+        let transfer_max_inflight = clamp_transfer_depth(
+            config.transfer_depth_initial,
+            config.transfer_depth_min,
+            config.transfer_depth_max,
+        );
         Self {
-            config: config.unwrap_or_default(),
+            config,
             last_applied_epoch: 0,
             admission_reject_enabled: false,
+            transfer_max_inflight,
             last_applied_actions: Vec::new(),
         }
     }
@@ -520,6 +571,7 @@ impl CoSchedulerActuator {
     fn apply(
         &mut self,
         plan: &CoSchedulerPlan,
+        snapshot: &CoSchedulerSnapshot,
         control: &mut ControlPlane,
     ) -> Vec<AppliedCoSchedulerAction> {
         if !self.config.apply || plan.epoch <= self.last_applied_epoch {
@@ -569,6 +621,18 @@ impl CoSchedulerActuator {
                         ),
                     ));
                 }
+                CoSchedulerActionKind::TuneTransferDepth => {
+                    let old = self.transfer_max_inflight;
+                    self.transfer_max_inflight = self.next_transfer_depth(snapshot);
+                    applied.push(applied_action(
+                        action,
+                        true,
+                        format!(
+                            "set transfer max_inflight {old}->{}",
+                            self.transfer_max_inflight
+                        ),
+                    ));
+                }
                 _ => {}
             }
         }
@@ -595,9 +659,40 @@ impl CoSchedulerActuator {
             last_applied_epoch: self.last_applied_epoch,
             admission_reject_enabled: self.admission_reject_enabled,
             admission_slo_violation_limit_us: control.admission_slo_limit(),
+            transfer_max_inflight: self.transfer_max_inflight,
             last_applied_actions: self.last_applied_actions.clone(),
         }
     }
+
+    fn next_transfer_depth(&self, snapshot: &CoSchedulerSnapshot) -> usize {
+        let min = self.config.transfer_depth_min.max(1);
+        let max = self.config.transfer_depth_max.max(min);
+        let current = self.transfer_max_inflight.clamp(min, max);
+        let first_layer_slow = snapshot
+            .transfer
+            .time_to_first_layer_ms
+            .map(|ms| ms > self.config.transfer_first_layer_budget_ms)
+            .unwrap_or(false);
+        let queue_high = snapshot.transfer.queue_depth >= self.config.transfer_high_queue_depth;
+        if first_layer_slow || queue_high {
+            return current.saturating_sub(1).max(min);
+        }
+        let overlap_low = snapshot
+            .transfer
+            .overlap_efficiency_pct
+            .map(|pct| pct < self.config.transfer_min_overlap_efficiency_pct)
+            .unwrap_or(false);
+        if overlap_low {
+            return current.saturating_add(1).min(max);
+        }
+        current.saturating_add(1).min(max)
+    }
+}
+
+fn clamp_transfer_depth(value: usize, min: usize, max: usize) -> usize {
+    let min = min.max(1);
+    let max = max.max(min);
+    value.clamp(min, max)
 }
 
 fn applied_action(
@@ -1186,7 +1281,7 @@ async fn run_co_scheduler_cycle(state: &GatewayState) -> CoSchedulerRuntimeState
     let plan = state.co_scheduler.plan(&snapshot, dry_run);
     let applied_actions = {
         let mut actuator = state.co_scheduler_actuator.write().await;
-        actuator.apply(&plan, &mut control)
+        actuator.apply(&plan, &snapshot, &mut control)
     };
     let actuator = state.co_scheduler_actuator.read().await.snapshot(&control);
     CoSchedulerRuntimeState {
@@ -1241,8 +1336,10 @@ async fn proxy_openai_path(
     let mut payload: Value = serde_json::from_slice(&body)?;
     let request_shape = request_shape_from_payload(&mut payload);
     let ttft_budget_ms = request_shape.slo.ttft_ms;
+    let co_scheduler_runtime = run_co_scheduler_cycle(&state).await;
+    let transfer_max_inflight = co_scheduler_runtime.actuator.transfer_max_inflight;
+    inject_transfer_max_inflight(&mut payload, transfer_max_inflight);
     let clean_body = serde_json::to_vec(&payload)?;
-    let _co_scheduler_runtime = run_co_scheduler_cycle(&state).await;
 
     let (engine, trace, action_plan) = {
         let control = state.control.read().await;
@@ -1341,6 +1438,10 @@ async fn proxy_openai_path(
         "x-quillcache-reusable-blocks",
         trace.reusable_blocks.to_string(),
     );
+    request = request.header(
+        "x-quillcache-transfer-max-inflight",
+        transfer_max_inflight.to_string(),
+    );
 
     // Count this request as in flight on the chosen engine for the prefill
     // window (dispatch → response headers), so concurrent requests see the load
@@ -1429,6 +1530,10 @@ async fn proxy_openai_path(
         .header(
             "x-quillcache-estimated-first-transfer-us",
             trace.estimated_first_transfer_us.to_string(),
+        )
+        .header(
+            "x-quillcache-transfer-max-inflight",
+            transfer_max_inflight.to_string(),
         );
     // Stream the upstream body straight through (SSE chunks forwarded as they
     // arrive) instead of buffering it, so the client's time-to-first-token
@@ -1475,6 +1580,24 @@ fn serving_mode_header(mode: ServingMode) -> &'static str {
     match mode {
         ServingMode::Aggregated => "aggregated",
         ServingMode::Disaggregated => "disaggregated",
+    }
+}
+
+fn inject_transfer_max_inflight(payload: &mut Value, transfer_max_inflight: usize) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    let params = object
+        .entry("kv_transfer_params")
+        .or_insert_with(|| json!({}));
+    if !params.is_object() {
+        *params = json!({});
+    }
+    if let Some(params) = params.as_object_mut() {
+        params.insert(
+            "quillcache_transfer_max_inflight".to_string(),
+            json!(transfer_max_inflight.max(1)),
+        );
     }
 }
 
@@ -1791,6 +1914,7 @@ mod tests {
         let mut actuator = CoSchedulerActuator::new(Some(CoSchedulerConfig {
             apply: true,
             admission_slo_violation_limit_us: 0,
+            ..CoSchedulerConfig::default()
         }));
         let action = CoSchedulerAction {
             epoch: 1,
@@ -1808,7 +1932,7 @@ mod tests {
             actions: vec![action],
         };
 
-        let applied = actuator.apply(&plan, &mut control);
+        let applied = actuator.apply(&plan, &CoSchedulerSnapshot::default(), &mut control);
         assert_eq!(applied.len(), 1);
         assert_eq!(control.admission_slo_limit(), Some(0));
 
@@ -1838,7 +1962,7 @@ mod tests {
             dry_run: false,
             actions: vec![],
         };
-        actuator.apply(&clear, &mut control);
+        actuator.apply(&clear, &CoSchedulerSnapshot::default(), &mut control);
         assert_eq!(control.admission_slo_limit(), None);
         assert!(matches!(
             control.admit(&cold).unwrap(),
@@ -1895,6 +2019,7 @@ mod tests {
                 dry_run: false,
                 actions: vec![action],
             },
+            &CoSchedulerSnapshot::default(),
             &mut control,
         );
 
@@ -1908,6 +2033,92 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(holders.contains(&"decode-a".to_string()));
         assert!(holders.contains(&"decode-b".to_string()));
+    }
+
+    #[test]
+    fn co_scheduler_tune_transfer_depth_updates_actuator() {
+        let engine = EngineEndpoint {
+            id: "decode-a".to_string(),
+            kind: quillcache_core::EngineKind::Vllm,
+            role: quillcache_core::EngineRole::Aggregated,
+            base_url: "http://127.0.0.1:8000".to_string(),
+            model_id: "model".to_string(),
+            tokenizer_id: "tok".to_string(),
+            tenant_id: "tenant".to_string(),
+            locality_domain: "local".to_string(),
+        };
+        let mut control = ControlPlane::new(vec![engine]);
+        let mut actuator = CoSchedulerActuator::new(Some(CoSchedulerConfig {
+            apply: true,
+            transfer_depth_initial: 1,
+            transfer_depth_max: 4,
+            ..CoSchedulerConfig::default()
+        }));
+        let action = |epoch| CoSchedulerAction {
+            epoch,
+            kind: CoSchedulerActionKind::TuneTransferDepth,
+            target_worker_id: None,
+            source_worker_id: None,
+            prefix_hash: None,
+            tier: None,
+            value: None,
+            reason: "transfer pressure".to_string(),
+        };
+        let mut snapshot = CoSchedulerSnapshot::default();
+        snapshot.transfer.time_to_first_layer_ms = Some(18.0);
+        snapshot.transfer.full_transfer_ms = Some(100.0);
+        snapshot.transfer.overlap_efficiency_pct = Some(20.0);
+
+        actuator.apply(
+            &CoSchedulerPlan {
+                epoch: 1,
+                dry_run: false,
+                actions: vec![action(1)],
+            },
+            &snapshot,
+            &mut control,
+        );
+        assert_eq!(actuator.snapshot(&control).transfer_max_inflight, 2);
+
+        snapshot.transfer.queue_depth = 32;
+        actuator.apply(
+            &CoSchedulerPlan {
+                epoch: 2,
+                dry_run: false,
+                actions: vec![action(2)],
+            },
+            &snapshot,
+            &mut control,
+        );
+        assert_eq!(actuator.snapshot(&control).transfer_max_inflight, 1);
+    }
+
+    #[test]
+    fn inject_transfer_max_inflight_preserves_existing_kv_transfer_params() {
+        let mut payload = json!({
+            "model": "m",
+            "prompt": "hello",
+            "kv_transfer_params": {
+                "do_remote_prefill": true,
+                "transfer_id": "pd-1"
+            }
+        });
+        inject_transfer_max_inflight(&mut payload, 4);
+        let params = payload.get("kv_transfer_params").unwrap();
+        assert_eq!(
+            params.get("do_remote_prefill").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            params.get("transfer_id").and_then(Value::as_str),
+            Some("pd-1")
+        );
+        assert_eq!(
+            params
+                .get("quillcache_transfer_max_inflight")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
     }
 
     #[test]

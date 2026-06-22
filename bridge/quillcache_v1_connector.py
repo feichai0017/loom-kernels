@@ -109,6 +109,14 @@ def _prefix_hash(token_ids: list[int], block_size: int, mm_hashes: list[str]) ->
     return digest, aligned
 
 
+def _positive_int(value: Any, default: int | None = None) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 @dataclass
 class ReqMeta:
     # Block-aligned prompt-prefix tokens this op covers.
@@ -124,6 +132,8 @@ class ReqMeta:
     key_prefix: str
     # Best-effort request id for observability; the data path does not depend on it.
     request_id: str | None = None
+    # Gateway/co-scheduler selected layer-load depth for this request.
+    load_max_inflight: int | None = None
 
     @staticmethod
     def make_meta(
@@ -133,6 +143,7 @@ class ReqMeta:
         is_store: bool,
         key_prefix: str,
         request_id: str | None = None,
+        load_max_inflight: int | None = None,
     ) -> "ReqMeta":
         valid_num_tokens = align_to_block_size(len(token_ids), block_size)
         token_ids_tensor = torch.tensor(token_ids)[:valid_num_tokens]
@@ -150,6 +161,7 @@ class ReqMeta:
             is_store=is_store,
             key_prefix=key_prefix,
             request_id=request_id,
+            load_max_inflight=load_max_inflight,
         )
 
 
@@ -165,10 +177,17 @@ class QuillCacheConnectorMetadata(KVConnectorMetadata):
         is_store: bool,
         key_prefix: str,
         request_id: str | None = None,
+        load_max_inflight: int | None = None,
     ) -> None:
         self.requests.append(
             ReqMeta.make_meta(
-                token_ids, block_ids, block_size, is_store, key_prefix, request_id
+                token_ids,
+                block_ids,
+                block_size,
+                is_store,
+                key_prefix,
+                request_id,
+                load_max_inflight,
             )
         )
 
@@ -229,6 +248,12 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
         self._telemetry_timeout_s = float(
             cfg.get_from_extra_config("telemetry_timeout_s", 0.25)
         )
+        self._load_max_inflight = _positive_int(
+            cfg.get_from_extra_config(
+                "load_max_inflight", os.environ.get("QC_LOAD_MAX_INFLIGHT", 1)
+            ),
+            1,
+        )
 
         # Disaggregation role (vLLM KVTransferConfig.kv_role), using vLLM's own
         # semantics: a pure prefill instance is `kv_producer` (saves a request's
@@ -258,7 +283,7 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
         self._load_attn_metadata: Any = None
         self._load_executor: "concurrent.futures.ThreadPoolExecutor | None" = None
         self._load_telemetry: dict[str, Any] | None = None
-        self._load_max_inflight = 1
+        self._request_load_max_inflight: dict[str, int] = {}
         self._telemetry_executor: "concurrent.futures.ThreadPoolExecutor | None" = None
 
         # The worker owns byte movement; it registers the storage segments on the
@@ -314,6 +339,29 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
 
     def _manifest_key(self, key_prefix: str) -> str:
         return f"{key_prefix}/__manifest__"
+
+    @staticmethod
+    def _requested_load_max_inflight(request: "Request") -> int | None:
+        params = request.kv_transfer_params or {}
+        return _positive_int(
+            params.get("quillcache_transfer_max_inflight")
+            or params.get("quillcache_max_inflight")
+            or params.get("max_inflight")
+        )
+
+    def _set_load_max_inflight(self, value: int | None) -> None:
+        next_value = _positive_int(value, self._load_max_inflight) or 1
+        if next_value == self._load_max_inflight:
+            return
+        self._load_max_inflight = next_value
+        if self._load_executor is None:
+            return
+        old = self._load_executor
+        self._load_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self._load_max_inflight, thread_name_prefix="qc-kv-load"
+        )
+        old.shutdown(wait=False, cancel_futures=False)
+        logger.info("QC transfer max_inflight set to %d", self._load_max_inflight)
 
     def _put_bytes(self, key: str, data: bytes) -> None:
         """Two-phase Put: allocate replica buffers, WRITE each, commit."""
@@ -490,6 +538,9 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
         assert isinstance(metadata, QuillCacheConnectorMetadata)
         load_requests = [r for r in metadata.requests if not r.is_store]
         n_load = len(load_requests)
+        requested_depths = [r.load_max_inflight for r in load_requests if r.load_max_inflight]
+        if requested_depths:
+            self._set_load_max_inflight(max(requested_depths))
         attn_metadata = forward_context.attn_metadata
         self._load_attn_metadata = attn_metadata
         if attn_metadata is None:
@@ -667,6 +718,9 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
                 logger.warning("QC disagg producer: do_remote_decode with no transfer_id")
         if num_external_tokens > 0:
             self._requests_need_load[request.request_id] = request
+            depth = self._requested_load_max_inflight(request)
+            if depth is not None:
+                self._request_load_max_inflight[request.request_id] = depth
 
     def build_connector_meta(self, scheduler_output: SchedulerOutput) -> KVConnectorMetadata:
         meta = QuillCacheConnectorMetadata()
@@ -697,6 +751,7 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
                     is_store=False,
                     key_prefix=self._pd_prefix(self._disagg_load[req_id]),
                     request_id=req_id,
+                    load_max_inflight=self._request_load_max_inflight.get(req_id),
                 )
                 total_need_load += 1
                 continue
@@ -712,6 +767,7 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
                     is_store=False,
                     key_prefix=self._content_prefix(prefix_hash),
                     request_id=req_id,
+                    load_max_inflight=self._request_load_max_inflight.get(req_id),
                 )
                 total_need_load += 1
             elif not self._exists(self._manifest_key(self._content_prefix(prefix_hash))):
@@ -751,6 +807,7 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
                 is_store=False,
                 key_prefix=key_prefix,
                 request_id=req_id,
+                load_max_inflight=self._request_load_max_inflight.get(req_id),
             )
             total_need_load += 1
 
@@ -758,6 +815,7 @@ class QuillCacheV1Connector(KVConnectorBase_V1):
         self._requests_need_load.clear()
         self._disagg_save.clear()
         self._disagg_load.clear()
+        self._request_load_max_inflight.clear()
         return meta
 
     def request_finished(
