@@ -3,11 +3,11 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "attnarc-engine"
+name = "loom-attention-engine"
 version = "2.0.0a1"
-description = "vLLM and SGLang adapters for the AttnArc attention runtime"
+description = "vLLM and SGLang adapters for the Loom attention runtime"
 requires-python = ">=3.10"
-license = "MIT"
+license = { text = "MIT" }
 dependencies = []
 
 [project.optional-dependencies]
@@ -15,12 +15,12 @@ vllm = ["vllm>=0.25,<0.26"]
 cuda = ["torch>=2.4"]
 
 [project.entry-points."vllm.general_plugins"]
-attnarc = "attnarc_engine.vllm_plugin:register"
+loom = "loom_attention.vllm_plugin:register"
 
 [project.scripts]
-attnarc-vllm-smoke = "attnarc_engine.vllm_smoke:main"
-attnarc-two-gpu-smoke = "attnarc_engine.two_gpu_smoke:main"
+loom-vllm-smoke = "loom_attention.vllm_smoke:main"
+loom-two-gpu-smoke = "loom_attention.two_gpu_smoke:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["attnarc_engine*"]
+include = ["loom_attention*"]

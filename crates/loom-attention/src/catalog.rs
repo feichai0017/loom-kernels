@@ -364,8 +364,7 @@ mod tests {
 
     #[test]
     fn holt_catalog_recovers_prefix_records() {
-        let path =
-            std::env::temp_dir().join(format!("attnarc-catalog-test-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("loom-catalog-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         let first = record("prefix", "a");
         {

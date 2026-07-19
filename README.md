@@ -1,8 +1,8 @@
-# AttnArc
+# Loom
 
-AttnArc is a disaggregated core-attention runtime for externally managed KV.
+Loom is a disaggregated core-attention runtime for externally managed KV.
 vLLM or SGLang keeps model execution; Mooncake, LMCache, or another `KvPool`
-owns sealed KV objects; AttnArc moves Q to a suitable attention worker,
+owns sealed KV objects; Loom moves Q to a suitable attention worker,
 executes near the historical KV, and returns the attention output. K_new/V_new
 travel only to the worker that owns the mutable tail.
 
@@ -11,7 +11,7 @@ travel only to the worker that owns the mutable tail.
 | Component | Owns |
 | --- | --- |
 | vLLM / SGLang | batching, weights, QKV projection, RoPE, FFN, sampling |
-| AttnArc | generation-pinned KV views, attention plans, tensor transport, execution and exact merge |
+| Loom | generation-pinned KV views, attention plans, tensor transport, execution and exact merge |
 | external `KvPool` | sealed KV allocation, placement, replication, eviction, durability |
 | Holt catalog | persistent `prefix -> PoolObjectRef` metadata, revalidated after recovery |
 
@@ -22,10 +22,10 @@ never synchronously queries the global controller or Holt.
 
 | Path | Responsibility |
 | --- | --- |
-| `crates/attnarc` | one Rust package with runtime, pool, catalog, planner, transport, and attention modules |
-| `attnarc-control` | slow-path catalog/scheduler binary from the `attnarc` package |
-| `attnarc-worker` | attention-worker control binary from the `attnarc` package |
-| `python/attnarc_engine` | out-of-tree vLLM attention backend adapters |
+| `crates/loom-attention` | one Rust package with runtime, pool, catalog, planner, transport, and attention modules |
+| `loom-control` | slow-path catalog/scheduler binary from the `loom-attention` package |
+| `loom-worker` | attention-worker control binary from the `loom-attention` package |
+| `python/loom_attention` | out-of-tree vLLM attention backend adapters |
 
 ## Implemented
 
@@ -43,7 +43,7 @@ never synchronously queries the global controller or Holt.
 - vLLM metadata-builder wrapper that records generation-checked paged-KV tensor
   descriptors without reading device tensor contents.
 - isolated CUDA A/B harness that compares native FlashAttention with the
-  AttnArc delegate using exact token IDs and sampled-logprob tolerance.
+  Loom delegate using exact token IDs and sampled-logprob tolerance.
 - two-GPU NCCL harness for Q-only remote-prefix execution, exact local-tail
   merge, and a Stage-KV payload/latency baseline.
 
@@ -67,15 +67,15 @@ PYTHONPATH=python python3 -m unittest discover -s python/tests -v
 On a Linux CUDA host with vLLM installed, run the M1 acceptance gate:
 
 ```bash
-attnarc-vllm-smoke compare --report build/vllm-smoke/report.json
+loom-vllm-smoke compare --report build/vllm-smoke/report.json
 ```
 
 Inspect the M2 payload asymmetry without CUDA, then run it on a Linux host with
 two NVIDIA GPUs:
 
 ```bash
-attnarc-two-gpu-smoke plan --prefix-tokens 4096
-attnarc-two-gpu-smoke run \
+loom-two-gpu-smoke plan --prefix-tokens 4096
+loom-two-gpu-smoke run \
   --prefix-tokens 4096 \
   --report build/two-gpu-smoke/report.json
 ```
@@ -83,8 +83,8 @@ attnarc-two-gpu-smoke run \
 Run the control endpoints:
 
 ```bash
-cargo run -p attnarc --bin attnarc-control -- --bind 127.0.0.1:8080
-cargo run -p attnarc --bin attnarc-worker -- --bind 127.0.0.1:8090
+cargo run -p loom-attention --bin loom-control -- --bind 127.0.0.1:8080
+cargo run -p loom-attention --bin loom-worker -- --bind 127.0.0.1:8090
 ```
 
 See [architecture](docs/architecture.md), [platform plan](docs/platform-plan.md),

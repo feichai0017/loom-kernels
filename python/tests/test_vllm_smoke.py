@@ -1,6 +1,6 @@
 import unittest
 
-from attnarc_engine.vllm_smoke import _compare_run_payloads
+from loom_attention.vllm_smoke import _compare_run_payloads
 
 
 def run_payload(*, backend: str, tokens=None, logprobs=None):

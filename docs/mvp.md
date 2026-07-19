@@ -31,7 +31,7 @@ tensor values are never copied to CPU by this observer.
 
 The current adapter does not map vLLM physical block IDs to external
 `PoolObjectRef` values or install the snapshot in the Rust runtime yet, and it
-has not decoded a real model. The `attnarc-vllm-smoke` command is the GPU
+has not decoded a real model. The `loom-vllm-smoke` command is the GPU
 acceptance harness: it runs native and delegated backends in isolated processes,
 requires exact generated token equality, checks sampled logprobs within a fixed
 tolerance, and writes a hardware/version-qualified JSON report. The harness is
@@ -41,7 +41,7 @@ at M2.
 
 ## M2a Two-GPU Data-Path Gate
 
-`attnarc-two-gpu-smoke` launches two exclusive CUDA processes with an NCCL
+`loom-two-gpu-smoke` launches two exclusive CUDA processes with an NCCL
 process group. Rank 0 acts as the model worker and owns Q plus the active tail.
 Rank 1 owns the sealed prefix. The Route-Q path sends Q to rank 1, returns
 float32 `(max, exp_sum, weighted_value)` partials, and merges them with the

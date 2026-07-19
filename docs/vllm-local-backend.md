@@ -2,18 +2,18 @@
 
 ## Purpose
 
-M1 proves that AttnArc can enter the real vLLM V1 attention call path without
+M1 proves that Loom can enter the real vLLM V1 attention call path without
 owning model execution or replacing its optimized kernel. The adapter registers
 as an out-of-tree `CUSTOM` backend, validates the local tensor contract, and
 delegates to vLLM `FlashAttentionImpl` with the same arguments and output tensor.
 
 ```text
 vLLM model runner
-  -> AttnArcFlashAttentionMetadataBuilder.build
+  -> LoomFlashAttentionMetadataBuilder.build
        -> CPU query boundary validation
        -> opaque paged-KV tensor descriptors
        -> generation-checked step snapshot
-  -> AttnArcFlashAttentionImpl.forward
+  -> LoomFlashAttentionImpl.forward
        -> first-call Q/K/V/output layout and device validation
        -> process-local timing and failure accounting
        -> vLLM FlashAttentionImpl.forward
@@ -35,10 +35,10 @@ Install it in the same Python environment as vLLM:
 python3 -m pip install -e './python[vllm]'
 ```
 
-Load only the AttnArc plugin and select the registered backend:
+Load only the Loom plugin and select the registered backend:
 
 ```bash
-VLLM_PLUGINS=attnarc \
+VLLM_PLUGINS=loom \
   vllm serve MODEL \
   --attention-backend CUSTOM \
   --enforce-eager
@@ -57,7 +57,7 @@ The first forward checks:
 - a deterministic layout identity from attention type, head counts, head size,
   and KV-cache dtype.
 
-Set `ATTNARC_VALIDATE_EVERY_FORWARD=1` for debugging dynamic layouts. The
+Set `LOOM_VALIDATE_EVERY_FORWARD=1` for debugging dynamic layouts. The
 default validates once per attention implementation to avoid repeated Python
 shape walks in vLLM's per-layer critical path. Call count, failures, elapsed
 time, layout identity, and last validated device are process-local telemetry;
@@ -66,7 +66,7 @@ they are not distributed scheduler evidence.
 ## Paged-KV Step Snapshot
 
 The custom backend returns a subclass of vLLM's
-`FlashAttentionMetadataBuilder`. After the native builder finishes, AttnArc
+`FlashAttentionMetadataBuilder`. After the native builder finishes, Loom
 attaches one immutable `StepMetadataSnapshot` to the resulting metadata. It
 contains:
 
@@ -80,7 +80,7 @@ contains:
 
 The snapshot deliberately does not contain physical block-table values. Reading
 those values in Python would synchronize the GPU. Prefix identity and
-`PoolObjectRef` mappings come from AttnArc's page table and pool events; a
+`PoolObjectRef` mappings come from Loom's page table and pool events; a
 later node-local bridge will join those control-plane identities with these
 device tensor descriptors.
 
@@ -92,13 +92,13 @@ idempotence with fake tensor and vLLM modules.
 
 ## CUDA Acceptance Gate
 
-The repository includes `attnarc-vllm-smoke`, but the result is valid only
+The repository includes `loom-vllm-smoke`, but the result is valid only
 when it runs on a Linux NVIDIA host. Install the adapter and pinned vLLM range in
 the same Python 3.10-3.12 environment:
 
 ```bash
 python3 -m pip install -e './python[vllm]'
-attnarc-vllm-smoke compare \
+loom-vllm-smoke compare \
   --report build/vllm-smoke/report.json
 ```
 
@@ -108,7 +108,7 @@ processes with identical model, dtype, prompts, seed, block size, eager mode,
 and prefix-caching settings:
 
 1. native vLLM `FLASH_ATTN`;
-2. AttnArc `CUSTOM`, which delegates to the same implementation.
+2. Loom `CUSTOM`, which delegates to the same implementation.
 
 It disables V1 multiprocessing for deterministic same-process execution, warms
 each engine, and checks every generated token ID and sampled token logprob.

@@ -3,7 +3,7 @@ import json
 import unittest
 from unittest.mock import patch
 
-from attnarc_engine.two_gpu_smoke import (
+from loom_attention.two_gpu_smoke import (
     BenchmarkConfig,
     main,
     percentile,
@@ -60,7 +60,7 @@ class TwoGpuSmokeContractTest(unittest.TestCase):
         error = io.StringIO()
         with (
             patch(
-                "attnarc_engine.two_gpu_smoke._run",
+                "loom_attention.two_gpu_smoke._run",
                 side_effect=RuntimeError("CUDA unavailable"),
             ),
             patch("sys.stderr", error),

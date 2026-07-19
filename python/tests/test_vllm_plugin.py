@@ -7,7 +7,7 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from attnarc_engine import vllm_plugin
+from loom_attention import vllm_plugin
 from test_local_delegate import FakeTensor
 
 
@@ -68,9 +68,9 @@ class VllmPluginTest(unittest.TestCase):
     def setUp(self) -> None:
         vllm_plugin._REGISTERED = False
         for name in (
-            "AttnArcFlashAttentionBackend",
-            "AttnArcFlashAttentionImpl",
-            "AttnArcFlashAttentionMetadataBuilder",
+            "LoomFlashAttentionBackend",
+            "LoomFlashAttentionImpl",
+            "LoomFlashAttentionMetadataBuilder",
         ):
             vllm_plugin.__dict__.pop(name, None)
 
@@ -138,15 +138,15 @@ class VllmPluginTest(unittest.TestCase):
         registrations = []
         with patch.dict(sys.modules, self.fake_modules(registrations), clear=False):
             with patch.dict(os.environ, {}, clear=False):
-                os.environ.pop("ATTNARC_VLLM_DELEGATE", None)
+                os.environ.pop("LOOM_VLLM_DELEGATE", None)
                 vllm_plugin.register()
 
         self.assertEqual(len(registrations), 1)
         self.assertEqual(
             registrations[0][1],
-            "attnarc_engine.vllm_plugin.AttnArcFlashAttentionBackend",
+            "loom_attention.vllm_plugin.LoomFlashAttentionBackend",
         )
-        implementation = vllm_plugin.AttnArcFlashAttentionBackend.get_impl_cls()(
+        implementation = vllm_plugin.LoomFlashAttentionBackend.get_impl_cls()(
             num_heads=8,
             head_size=64,
             scale=0.125,
@@ -160,8 +160,8 @@ class VllmPluginTest(unittest.TestCase):
         )
         self.assertIs(result, tensors["output"])
         self.assertEqual(implementation.delegate_calls, 1)
-        self.assertEqual(implementation.attnarc_observer.snapshot().calls, 1)
-        self.assertFalse(implementation.attnarc_observer.validate_every_call)
+        self.assertEqual(implementation.loom_observer.snapshot().calls, 1)
+        self.assertFalse(implementation.loom_observer.validate_every_call)
 
     def test_registration_is_idempotent(self) -> None:
         registrations = []
@@ -175,7 +175,7 @@ class VllmPluginTest(unittest.TestCase):
         with patch.dict(sys.modules, self.fake_modules(registrations), clear=False):
             vllm_plugin.register()
 
-        builder_class = vllm_plugin.AttnArcFlashAttentionBackend.get_builder_cls()
+        builder_class = vllm_plugin.LoomFlashAttentionBackend.get_builder_cls()
         builder = builder_class(
             SimpleNamespace(block_size=16, dtype="torch.bfloat16"),
             ["model.layers.0.self_attn"],
@@ -184,7 +184,7 @@ class VllmPluginTest(unittest.TestCase):
         )
         common_metadata = self.common_metadata()
         metadata = builder.build(16, common_metadata)
-        snapshot = metadata.attnarc_step_snapshot
+        snapshot = metadata.loom_step_snapshot
 
         self.assertEqual(builder.delegate_builds, 1)
         self.assertEqual(snapshot.generation, 1)
@@ -196,19 +196,19 @@ class VllmPluginTest(unittest.TestCase):
             FakeTensor((2, 6), dtype="torch.int32", address=0x600),
             FakeTensor((3,), dtype="torch.int64", address=0x700),
         )
-        self.assertEqual(updated.attnarc_step_snapshot.generation, 2)
-        self.assertEqual(updated.attnarc_step_snapshot.block_table.data_ptr, 0x600)
+        self.assertEqual(updated.loom_step_snapshot.generation, 2)
+        self.assertEqual(updated.loom_step_snapshot.block_table.data_ptr, 0x600)
 
     def test_delegate_failure_is_recorded_and_propagated(self) -> None:
         registrations = []
         with patch.dict(sys.modules, self.fake_modules(registrations), clear=False):
             vllm_plugin.register()
-        implementation = vllm_plugin.AttnArcFlashAttentionBackend.get_impl_cls()(
+        implementation = vllm_plugin.LoomFlashAttentionBackend.get_impl_cls()(
             8, 64, 0.125, 2
         )
         with self.assertRaisesRegex(RuntimeError, "delegate failure"):
             implementation.forward("fail", attn_metadata=object(), **self.tensors())
-        snapshot = implementation.attnarc_observer.snapshot()
+        snapshot = implementation.loom_observer.snapshot()
         self.assertEqual(snapshot.calls, 1)
         self.assertEqual(snapshot.failures, 1)
 
@@ -216,7 +216,7 @@ class VllmPluginTest(unittest.TestCase):
         registrations = []
         with patch.dict(sys.modules, self.fake_modules(registrations), clear=False):
             with patch.dict(
-                os.environ, {"ATTNARC_VLLM_DELEGATE": "triton"}, clear=False
+                os.environ, {"LOOM_VLLM_DELEGATE": "triton"}, clear=False
             ):
                 with self.assertRaisesRegex(RuntimeError, "supports only"):
                     vllm_plugin.register()
@@ -226,12 +226,12 @@ class VllmPluginTest(unittest.TestCase):
         with patch.dict(sys.modules, self.fake_modules(registrations), clear=False):
             with patch.dict(
                 os.environ,
-                {"ATTNARC_VALIDATE_EVERY_FORWARD": "sometimes"},
+                {"LOOM_VALIDATE_EVERY_FORWARD": "sometimes"},
                 clear=False,
             ):
                 vllm_plugin.register()
                 implementation_class = (
-                    vllm_plugin.AttnArcFlashAttentionBackend.get_impl_cls()
+                    vllm_plugin.LoomFlashAttentionBackend.get_impl_cls()
                 )
                 with self.assertRaisesRegex(RuntimeError, "must be a boolean"):
                     implementation_class(8, 64, 0.125, 2)

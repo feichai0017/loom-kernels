@@ -1,18 +1,18 @@
-# AttnArc Architecture v3
+# Loom Architecture v3
 
 ## Positioning
 
-AttnArc is a disaggregated core-attention runtime attached to external KV
+Loom is a disaggregated core-attention runtime attached to external KV
 pools. The engine sends Q plus a generation-pinned historical KV view. It also
 sends an optional K_new/V_new append to the worker that owns the mutable tail.
-AttnArc returns the attention output; it owns neither model execution nor
+Loom returns the attention output; it owns neither model execution nor
 authoritative KV lifetime.
 
 ```mermaid
 flowchart TB
     Client["Client"] --> Engine["vLLM / SGLang"]
     Engine --> Projection["QKV projection + RoPE"]
-    Projection --> Adapter["AttnArc engine adapter"]
+    Projection --> Adapter["Loom engine adapter"]
     Adapter --> Runtime["Node runtime\nKvView + active tail + step plan"]
 
     Runtime --> Local["Local attention"]
@@ -33,7 +33,7 @@ flowchart TB
 
 ## Ownership
 
-The engine owns model execution. The pool owns sealed KV objects. AttnArc
+The engine owns model execution. The pool owns sealed KV objects. Loom
 owns compute coordination and transient sequence state.
 
 An active tail stays on the model worker until it fills a complete pool object.
@@ -42,9 +42,9 @@ sealed object through a generation-checked `PoolObjectRef` and read lease.
 
 ## Repository Boundaries
 
-The Rust workspace has one package, `attnarc`, with public `types`, `pool`,
+The Rust workspace has one package, `loom-attention`, with public `types`, `pool`,
 `catalog`, `scheduler`, `attention`, `runtime`, and `transport` modules. The
-same package builds the `attnarc-control` and `attnarc-worker` binaries. These
+same package builds the `loom-control` and `loom-worker` binaries. These
 contracts share one release cadence; separate packages previously added
 manifests and dependency plumbing without an independent release boundary.
 

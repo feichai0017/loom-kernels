@@ -3,7 +3,7 @@
 Paper: `papers/megascale-infer-sigcomm25-2504.02263.pdf`
 
 Context: ByteDance Seed / Peking University, SIGCOMM 2025. The paper targets
-large-scale MoE inference. It is useful for AttnArc because it shows how a
+large-scale MoE inference. It is useful for Loom because it shows how a
 production AI infra system turns resource imbalance into a disaggregation and
 co-scheduling problem.
 
@@ -98,9 +98,9 @@ The strongest signal is not just speedup. It is the ablation chain:
 4. ping-pong pipeline overlaps communication with compute;
 5. deployment plan matters because attention and expert times must be balanced.
 
-## Connection To AttnArc
+## Connection To Loom
 
-AttnArc's architecture separates core attention from the model worker while
+Loom's architecture separates core attention from the model worker while
 leaving QKV projection, FFN, and sampling in the inference engine. The current
 adapter still delegates to local FlashAttention. The useful pattern is:
 
@@ -112,9 +112,9 @@ adapter still delegates to local FlashAttention. The useful pattern is:
 
 Mapping:
 
-| MegaScale-Infer | AttnArc |
+| MegaScale-Infer | Loom |
 | --- | --- |
-| Attention nodes | AttnArc workers that execute near leased KV objects |
+| Attention nodes | Loom workers that execute near leased KV objects |
 | Expert nodes | Model workers that retain projection, FFN, and sampling |
 | M2N token dispatch | Query and partial-result traffic between model and attention workers |
 | Ping-pong pipeline | Overlap remote-prefix attention, local-tail attention, and merge |
@@ -132,20 +132,20 @@ Mapping:
    pressure, memory use, and tail latency.
 
 3. Balance phases by measured time.
-   MegaScale-Infer balances attention and FFN time. AttnArc should balance
+   MegaScale-Infer balances attention and FFN time. Loom should balance
    query transport, remote attention, local-tail attention, merge, and KV stage.
 
 4. Preserve generic fallback.
    MegaScale-Infer optimizes M2N because NCCL is a bad fit for that pattern.
-   AttnArc should evaluate CUDA P2P/NCCL on one node and NIXL/UCX across
+   Loom should evaluate CUDA P2P/NCCL on one node and NIXL/UCX across
    nodes, with an explicit CPU-staged correctness baseline.
 
 5. Use cost per GPU, not only latency.
    Heterogeneous deployment matters because attention and FFN have different
-   resource profiles. For AttnArc, CXL/DRAM/SSD/HBM tiers should be compared
+   resource profiles. For Loom, CXL/DRAM/SSD/HBM tiers should be compared
    by SLO-goodput per dollar or per GPU, not only raw fetch latency.
 
-## Proposed AttnArc Tasks
+## Proposed Loom Tasks
 
 P0: Implement the one-node Route-Q path.
 
@@ -173,7 +173,7 @@ MegaScale-Infer is a clean example of production AI infra reasoning:
 - use a pipeline to hide the new boundary cost;
 - validate with throughput, latency tails, cost, and ablations.
 
-For AttnArc, the analogous story is:
+For Loom, the analogous story is:
 
 > Distributed attention should be scheduled as a pipeline of query transport,
 > local and remote kernels, partial-result transport, and exact merge, with each

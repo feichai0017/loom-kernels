@@ -24,13 +24,13 @@ jobs:
         run: PYTHONPATH=python python -m unittest discover -s python/tests -v
 
       - name: Compile adapter package
-        run: python -m compileall -q python/attnarc_engine
+        run: python -m compileall -q python/loom_attention
 
       - name: Validate two-GPU payload plan
-        run: PYTHONPATH=python python -m attnarc_engine.two_gpu_smoke plan
+        run: PYTHONPATH=python python -m loom_attention.two_gpu_smoke plan
 
       - name: Build adapter wheel
-        run: python -m pip wheel --no-deps --wheel-dir /tmp/attnarc-wheel ./python
+        run: python -m pip wheel --no-deps --wheel-dir /tmp/loom-attention-wheel ./python
 
   rust:
     name: fmt · clippy · test

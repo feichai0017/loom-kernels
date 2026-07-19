@@ -1,4 +1,4 @@
-# AttnArc Platform Plan v3
+# Loom Platform Plan v3
 
 ## Research Question
 
@@ -30,7 +30,7 @@ Exit: `cargo test --workspace` validates ownership and state-machine invariants.
 
 - add a vLLM `AttentionBackend` adapter;
 - delegate to the existing local kernel;
-- translate vLLM block tables and layouts into AttnArc types;
+- translate vLLM block tables and layouts into Loom types;
 - produce a Q tensor handle, optional mutable-tail K_new/V_new append, and a
   generation-pinned `KvView`;
 - verify output equality and fallback behavior.

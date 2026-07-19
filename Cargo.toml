@@ -1,13 +1,13 @@
 [workspace]
-members = ["crates/attnarc"]
-default-members = ["crates/attnarc"]
+members = ["crates/loom-attention"]
+default-members = ["crates/loom-attention"]
 resolver = "2"
 
 [workspace.package]
 version = "2.0.0-alpha.1"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/feichai0017/attnarc"
+repository = "https://github.com/feichai0017/loom-attention"
 
 [workspace.dependencies]
 async-trait = "0.1"

@@ -19,7 +19,7 @@ python/build/
 /build/
 
 # Runtime state
-.attnarc/
+.loom/
 
 # Local research corpus
 papers/

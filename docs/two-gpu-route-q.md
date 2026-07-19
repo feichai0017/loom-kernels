@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This gate validates the first physical AttnArc data path on one Linux host with
+This gate validates the first physical Loom data path on one Linux host with
 two NVIDIA GPUs. It answers two separate questions:
 
 1. Does Q-only remote-prefix attention plus exact local-tail merge produce the
@@ -47,7 +47,7 @@ python3 -m pip install -e ./python --no-deps
 ## Plan Without CUDA
 
 ```bash
-attnarc-two-gpu-smoke plan \
+loom-two-gpu-smoke plan \
   --prefix-tokens 4096 \
   --tail-tokens 16 \
   --rows 1 \
@@ -64,7 +64,7 @@ launch, queueing, synchronization, and kernel costs.
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 \
-attnarc-two-gpu-smoke run \
+loom-two-gpu-smoke run \
   --prefix-tokens 4096 \
   --tail-tokens 16 \
   --rows 1 \

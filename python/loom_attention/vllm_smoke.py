@@ -1,6 +1,6 @@
-"""CUDA acceptance test for the AttnArc vLLM attention backend.
+"""CUDA acceptance test for the Loom vLLM attention backend.
 
-The public ``compare`` command runs native FlashAttention and the AttnArc
+The public ``compare`` command runs native FlashAttention and the Loom
 delegate in separate processes. This avoids reusing CUDA/vLLM global state and
 turns M1 correctness into a machine-readable token and logprob comparison.
 """
@@ -22,10 +22,10 @@ from typing import Any, Sequence
 DEFAULT_MODEL = "HuggingFaceTB/SmolLM2-135M-Instruct"
 DEFAULT_REVISION = "83212e1e2b3cfd6958f3707877bb878945dea8ee"
 DEFAULT_PROMPTS = (
-    "AttnArc validates a shared long-context prefix before attention. "
+    "Loom validates a shared long-context prefix before attention. "
     "The runtime tracks object identity, generation, layout, and leases. "
     "For this deterministic test, summarize the role of the page table:",
-    "AttnArc validates a shared long-context prefix before attention. "
+    "Loom validates a shared long-context prefix before attention. "
     "The runtime tracks object identity, generation, layout, and leases. "
     "For this deterministic test, summarize the role of the scheduler:",
 )
@@ -251,7 +251,7 @@ def _child_command(args: argparse.Namespace, backend: str, output: Path) -> list
     return [
         sys.executable,
         "-m",
-        "attnarc_engine.vllm_smoke",
+        "loom_attention.vllm_smoke",
         "run",
         "--backend",
         backend,
@@ -281,9 +281,9 @@ def _child_command(args: argparse.Namespace, backend: str, output: Path) -> list
 def _compare(args: argparse.Namespace) -> int:
     environment = os.environ.copy()
     environment["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
-    environment["VLLM_PLUGINS"] = "attnarc"
+    environment["VLLM_PLUGINS"] = "loom"
     environment["TOKENIZERS_PARALLELISM"] = "false"
-    with tempfile.TemporaryDirectory(prefix="attnarc-vllm-smoke-") as directory:
+    with tempfile.TemporaryDirectory(prefix="loom-vllm-smoke-") as directory:
         directory_path = Path(directory)
         native_path = directory_path / "native.json"
         custom_path = directory_path / "custom.json"
@@ -304,7 +304,7 @@ def _compare(args: argparse.Namespace) -> int:
         )
     _write_json(args.report, report)
     print(
-        f"AttnArc vLLM smoke {'PASSED' if report['passed'] else 'FAILED'}; "
+        f"Loom vLLM smoke {'PASSED' if report['passed'] else 'FAILED'}; "
         f"report: {args.report}"
     )
     for difference in report["differences"]:
@@ -339,7 +339,7 @@ def _validate_arguments(args: argparse.Namespace) -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compare native and AttnArc-delegated vLLM attention"
+        description="Compare native and Loom-delegated vLLM attention"
     )
     commands = parser.add_subparsers(dest="command", required=True)
     compare = commands.add_parser("compare", help="run the complete CUDA A/B gate")

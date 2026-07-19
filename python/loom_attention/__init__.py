@@ -1,4 +1,4 @@
-"""Engine adapters for AttnArc."""
+"""Engine adapters for Loom."""
 
 from .local_delegate import LocalForwardObserver, TensorContractError
 from .step_metadata import (

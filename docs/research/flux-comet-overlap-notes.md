@@ -5,7 +5,7 @@ Papers:
 - `papers/flux-comm-overlap-2406.06858.pdf`
 - `papers/comet-moe-overlap-mlsys25-2502.19811.pdf`
 
-Question for AttnArc: what should a distributed attention runtime learn from
+Question for Loom: what should a distributed attention runtime learn from
 kernel-level and MoE-level communication/computation overlap systems?
 
 ## Shared Lesson
@@ -18,7 +18,7 @@ Flux, Comet, and MegaScale-Infer all make the same systems move:
 4. Keep compute efficiency from collapsing while exposing overlap.
 5. Tune the overlap using runtime shape, topology, and queueing signals.
 
-For AttnArc, the equivalent unit is a query batch, KV shard, or partial
+For Loom, the equivalent unit is a query batch, KV shard, or partial
 softmax result that can execute before all remote work finishes.
 
 ## Flux Digest
@@ -151,15 +151,15 @@ preserving expert compute efficiency.
 - Weak point: the design relies on custom CUDA/C++ kernels, NVSHMEM buffers, and
   profiled kernel variants. This is not a portable control-plane interface.
 
-## Comparison For AttnArc
+## Comparison For Loom
 
-| System | Boundary | Scheduling unit | Runtime signal | What AttnArc borrows |
+| System | Boundary | Scheduling unit | Runtime signal | What Loom borrows |
 | --- | --- | --- | --- | --- |
 | Flux | Tensor-parallel GEMM + communication | GEMM tile | effective communication time, overlap efficiency | measure exposed transfer and separate it from compute |
 | Comet | MoE dispatch/expert/combine pipeline | shared-tensor slice / thread block | hidden communication %, optimal comm/compute block split | dependency-aware readiness and adaptive resource split |
-| AttnArc | distributed attention over externally owned KV | query batch, KV shard, partial result | queue, transport, kernel, merge, and exposed wait time | schedule local and remote partial attention as one dependency graph |
+| Loom | distributed attention over externally owned KV | query batch, KV shard, partial result | queue, transport, kernel, merge, and exposed wait time | schedule local and remote partial attention as one dependency graph |
 
-## Design Implications For AttnArc
+## Design Implications For Loom
 
 1. Measure exposed communication.
    Record how much Route-Q transport remains visible after remote attention and
@@ -176,7 +176,7 @@ preserving expert compute efficiency.
 
 4. Tune remote in-flight depth with measurements.
    Flux and Comet both show that finer granularity helps only until scheduling
-   overhead or compute underutilization dominates. AttnArc should sweep the
+   overhead or compute underutilization dominates. Loom should sweep the
    number of concurrent remote partials and report queue, transport, kernel,
    merge, and end-to-end decode time.
 
@@ -205,7 +205,7 @@ P2: Build predicted-versus-actual decode-time plots.
 
 - Compare planner estimates against executor and transport telemetry.
 - Label points by execution mode, topology, KV length, and in-flight depth.
-- The graph should answer whether AttnArc's routing cost model predicts real
+- The graph should answer whether Loom's routing cost model predicts real
   decode behavior.
 
 ## Interview Takeaway
@@ -216,6 +216,6 @@ For ByteDance AML-style AI infra, the pattern is:
 > understand the dependency that prevents overlap, reduce the scheduling unit,
 > and verify that compute efficiency does not collapse.
 
-AttnArc applies that pattern to distributed core attention: local and remote
+Loom applies that pattern to distributed core attention: local and remote
 partial attention, Q/O transport, and exact merge form one measured dependency
 graph.

@@ -1,4 +1,4 @@
-//! Stable, dependency-light types shared by AttnArc services and adapters.
+//! Stable, dependency-light types shared by Loom services and adapters.
 //!
 //! This module deliberately knows nothing about Mooncake, vLLM, CUDA, Holt, or
 //! any wire protocol. Physical implementations live behind outer-layer traits.

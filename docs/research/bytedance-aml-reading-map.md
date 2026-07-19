@@ -1,6 +1,6 @@
 # ByteDance AML / AI Infra Reading Map
 
-This note organizes the local paper set into a study path for AttnArc. The
+This note organizes the local paper set into a study path for Loom. The
 goal is not to read papers as isolated summaries. Each paper should produce one
 of three artifacts: a design update, an experiment, or an interview-ready
 systems explanation.
@@ -17,7 +17,7 @@ AI infra for LLMs has one recurring pattern:
 5. Evaluate with SLO goodput, latency tails, utilization, and cost, not only raw
    throughput.
 
-AttnArc uses the same pattern: the external pool owns sealed KV objects, and
+Loom uses the same pattern: the external pool owns sealed KV objects, and
 the runtime is designed to choose where core attention executes relative to
 those objects. The current adapter still executes attention locally.
 
@@ -27,7 +27,7 @@ those objects. The current adapter still executes attention locally.
 
 Read first because this is closest to ByteDance AML / Seed systems style.
 
-| Paper | Local file | Core idea | AttnArc connection |
+| Paper | Local file | Core idea | Loom connection |
 | --- | --- | --- | --- |
 | MegaScale-Infer | `papers/megascale-infer-sigcomm25-2504.02263.pdf` | Disaggregate attention and FFN for MoE serving; use ping-pong pipeline and M2N communication. | Motivates separate model and attention workers plus workload-specific communication. |
 | Flux | `papers/flux-comm-overlap-2406.06858.pdf` | Fine-grained communication/computation overlap through kernel fusion. | Motivates measuring exposed Q/O communication after overlap. |
@@ -41,7 +41,7 @@ What to learn:
 - why custom communication sometimes beats generic collectives;
 - how pipeline depth trades latency for throughput.
 
-AttnArc tasks:
+Loom tasks:
 
 - implement one-node Route-Q and exact partial-softmax merge;
 - compare Local, RouteQuery, StageKv, and Sharded under one workload;
@@ -49,7 +49,7 @@ AttnArc tasks:
 
 ### 2. KV Cache Memory And Storage Tiers
 
-| Paper | Local file | Core idea | AttnArc connection |
+| Paper | Local file | Core idea | Loom connection |
 | --- | --- | --- | --- |
 | CXL KV Cache | `papers/cxl-kv-cache-storage-neurips24.pdf` | Use CXL memory as a KV cache tier under TTFT SLO. | Extends external-pool placement and attention cost candidates beyond HBM/DRAM. |
 | Tutti | `papers/tutti-ssd-kv-2605.03375.pdf` | Make SSD-backed KV practical using GPU-centric bulk I/O and slack-aware scheduling. | Guides SSD-backed `KvPool` and StageKv policy. |
@@ -63,7 +63,7 @@ What to learn:
 - SSD/CXL paths need batching and slack-aware scheduling to avoid GPU stalls;
 - storage systems papers matter to serving when KV becomes external state.
 
-AttnArc tasks:
+Loom tasks:
 
 - add real `KvPool` adapters and tier-specific cost measurements;
 - compare RouteQuery, StageKv, and recompute boundaries;
@@ -71,7 +71,7 @@ AttnArc tasks:
 
 ### 3. KV Cache Safety And Identity
 
-| Paper | Local file | Core idea | AttnArc connection |
+| Paper | Local file | Core idea | Loom connection |
 | --- | --- | --- | --- |
 | Prompt Leakage | `papers/prompt-leakage-kvcache-sharing-ndss25.pdf` | KV cache sharing can leak prompts across tenants. | Direct motivation for `IdentityScope` and safe reuse refusal. |
 
@@ -81,7 +81,7 @@ What to learn:
 - content hash equality is not enough for safe reuse;
 - tenant, model, tokenizer, and adapter identity belong in the reuse contract.
 
-AttnArc tasks:
+Loom tasks:
 
 - add a threat-model note for identity-aware reuse;
 - expose identity and generation refusal metrics from the runtime;
@@ -89,7 +89,7 @@ AttnArc tasks:
 
 ### 4. Serving Baselines
 
-| Paper | Local file | Core idea | AttnArc connection |
+| Paper | Local file | Core idea | Loom connection |
 | --- | --- | --- | --- |
 | DistServe | `papers/distserve-osdi24-2401.09670.pdf` | P/D disaggregation for goodput. | SLO-goodput evaluation baseline. |
 | Mooncake | `papers/mooncake-fast25-2407.00079.pdf` | KVCache-centric disaggregated architecture. | External `KvPool` and transfer baseline. |
@@ -105,8 +105,8 @@ For each paper, answer these in the notes:
 2. What boundary does it introduce or move?
 3. What scheduling or communication mechanism hides the bottleneck?
 4. Which metrics prove the claim?
-5. Which assumptions may not hold for AttnArc?
-6. What design or experiment should AttnArc add?
+5. Which assumptions may not hold for Loom?
+6. What design or experiment should Loom add?
 
 ## Current Reading Order
 

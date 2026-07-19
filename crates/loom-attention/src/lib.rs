@@ -1,4 +1,4 @@
-//! Contracts and node-local state for the AttnArc attention runtime.
+//! Contracts and node-local state for the Loom attention runtime.
 //!
 //! The Rust control endpoint, worker endpoint, catalog, planner, and runtime
 //! share one release. Engine adapters and native GPU kernels retain their own

@@ -532,7 +532,7 @@ def _run(config: BenchmarkConfig, report_path: Path) -> int:
     torch = _require_cuda_environment()
     import torch.multiprocessing as multiprocessing
 
-    with TemporaryDirectory(prefix="attnarc-two-gpu-") as directory:
+    with TemporaryDirectory(prefix="loom-two-gpu-") as directory:
         rendezvous = Path(directory) / "nccl-rendezvous"
         init_method = f"file://{rendezvous}"
         multiprocessing.spawn(
@@ -543,7 +543,7 @@ def _run(config: BenchmarkConfig, report_path: Path) -> int:
         )
     report = json.loads(report_path.read_text())
     print(
-        "AttnArc two-GPU smoke "
+        "Loom two-GPU smoke "
         f"{'PASSED' if report['passed'] else 'FAILED'}; "
         f"Route-Q p50={report['route_query']['p50_ms']:.3f} ms, "
         f"Stage-KV p50={report['stage_kv']['p50_ms']:.3f} ms"
@@ -587,7 +587,7 @@ def _config_from_args(args: argparse.Namespace) -> BenchmarkConfig:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Validate AttnArc Route-Q against Stage-KV on two CUDA GPUs"
+        description="Validate Loom Route-Q against Stage-KV on two CUDA GPUs"
     )
     commands = parser.add_subparsers(dest="command", required=True)
     plan = commands.add_parser("plan", help="print payload sizes without CUDA")
@@ -621,7 +621,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         return _run(config, args.report)
     except (RuntimeError, ValueError) as error:
-        print(f"attnarc-two-gpu-smoke: {error}", file=sys.stderr)
+        print(f"loom-two-gpu-smoke: {error}", file=sys.stderr)
         return 2
 
 
