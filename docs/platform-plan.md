@@ -43,6 +43,8 @@ Exit: one real model decodes through the adapter with no remote execution.
 - send Q through CUDA P2P or NCCL;
 - execute remote partial attention;
 - return output/LSE statistics and merge with the local active tail.
+- compare end-to-end Route-Q and Stage-KV latency under one deterministic
+  workload before replacing the reference kernel.
 
 Exit: split execution matches the unsharded reference within dtype tolerance.
 

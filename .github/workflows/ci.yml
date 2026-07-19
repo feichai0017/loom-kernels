@@ -26,6 +26,9 @@ jobs:
       - name: Compile adapter package
         run: python -m compileall -q python/attnarc_engine
 
+      - name: Validate two-GPU payload plan
+        run: PYTHONPATH=python python -m attnarc_engine.two_gpu_smoke plan
+
       - name: Build adapter wheel
         run: python -m pip wheel --no-deps --wheel-dir /tmp/attnarc-wheel ./python
 

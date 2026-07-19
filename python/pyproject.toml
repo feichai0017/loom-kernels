@@ -12,12 +12,14 @@ dependencies = []
 
 [project.optional-dependencies]
 vllm = ["vllm>=0.25,<0.26"]
+cuda = ["torch>=2.4"]
 
 [project.entry-points."vllm.general_plugins"]
 attnarc = "attnarc_engine.vllm_plugin:register"
 
 [project.scripts]
 attnarc-vllm-smoke = "attnarc_engine.vllm_smoke:main"
+attnarc-two-gpu-smoke = "attnarc_engine.two_gpu_smoke:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

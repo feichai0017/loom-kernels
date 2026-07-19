@@ -39,6 +39,24 @@ implemented, but no CUDA report has been produced on the current macOS host.
 Those remain M1 exit conditions. Remote attention and split-KV execution begin
 at M2.
 
+## M2a Two-GPU Data-Path Gate
+
+`attnarc-two-gpu-smoke` launches two exclusive CUDA processes with an NCCL
+process group. Rank 0 acts as the model worker and owns Q plus the active tail.
+Rank 1 owns the sealed prefix. The Route-Q path sends Q to rank 1, returns
+float32 `(max, exp_sum, weighted_value)` partials, and merges them with the
+local-tail partial. The result is compared with full attention over the
+concatenated prefix and tail.
+
+The same processes then run a Stage-KV baseline that sends prefix K/V from rank
+1 to rank 0. The JSON report records p50/p99 latency, payload bytes, GPU/NCCL
+versions, peer-access capability, workload shape, and correctness error.
+
+The harness performs real CUDA computation and NCCL transfers, but its
+attention kernel is a PyTorch `einsum` online-softmax reference. It validates
+the protocol and performance crossover, not production kernel throughput. M2b
+replaces that executor with a paged FlashInfer or native vLLM kernel.
+
 ## Correctness Gate
 
 For fixed Q/K/V tensors, compare:

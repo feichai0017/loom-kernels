@@ -44,12 +44,14 @@ never synchronously queries the global controller or Holt.
   descriptors without reading device tensor contents.
 - isolated CUDA A/B harness that compares native FlashAttention with the
   AttnArc delegate using exact token IDs and sampled-logprob tolerance.
+- two-GPU NCCL harness for Q-only remote-prefix execution, exact local-tail
+  merge, and a Stage-KV payload/latency baseline.
 
 ## Not Implemented Yet
 
 - SGLang and remote-execution attention backend adapters;
-- CUDA partial-attention and merge kernels;
-- CUDA IPC, NCCL, NIXL, or GPUDirect RDMA transports;
+- an executed two-GPU report and optimized CUDA partial-attention kernels;
+- production CUDA IPC, NCCL, NIXL, or GPUDirect RDMA transports;
 - a production Mooncake adapter;
 - remote GPU end-to-end latency or throughput claims.
 
@@ -68,6 +70,16 @@ On a Linux CUDA host with vLLM installed, run the M1 acceptance gate:
 attnarc-vllm-smoke compare --report build/vllm-smoke/report.json
 ```
 
+Inspect the M2 payload asymmetry without CUDA, then run it on a Linux host with
+two NVIDIA GPUs:
+
+```bash
+attnarc-two-gpu-smoke plan --prefix-tokens 4096
+attnarc-two-gpu-smoke run \
+  --prefix-tokens 4096 \
+  --report build/two-gpu-smoke/report.json
+```
+
 Run the control endpoints:
 
 ```bash
@@ -76,7 +88,8 @@ cargo run -p attnarc --bin attnarc-worker -- --bind 127.0.0.1:8090
 ```
 
 See [architecture](docs/architecture.md), [platform plan](docs/platform-plan.md),
-[vLLM local backend](docs/vllm-local-backend.md), and
+[vLLM local backend](docs/vllm-local-backend.md),
+[two-GPU Route-Q](docs/two-gpu-route-q.md), and
 [protocol invariants](docs/protocols.md).
 
 ## License
