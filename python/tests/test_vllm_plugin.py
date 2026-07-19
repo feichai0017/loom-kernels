@@ -67,6 +67,8 @@ class FakeFlashAttentionMetadataBuilder:
 class VllmPluginTest(unittest.TestCase):
     def setUp(self) -> None:
         vllm_plugin._REGISTERED = False
+        vllm_plugin._FORWARD_OBSERVERS.clear()
+        vllm_plugin._STEP_OBSERVERS.clear()
         for name in (
             "LoomFlashAttentionBackend",
             "LoomFlashAttentionImpl",
@@ -146,6 +148,9 @@ class VllmPluginTest(unittest.TestCase):
             registrations[0][1],
             "loom_attention.vllm_plugin.LoomFlashAttentionBackend",
         )
+        self.assertEqual(
+            vllm_plugin.LoomFlashAttentionBackend.get_name(), "CUSTOM"
+        )
         implementation = vllm_plugin.LoomFlashAttentionBackend.get_impl_cls()(
             num_heads=8,
             head_size=64,
@@ -162,6 +167,10 @@ class VllmPluginTest(unittest.TestCase):
         self.assertEqual(implementation.delegate_calls, 1)
         self.assertEqual(implementation.loom_observer.snapshot().calls, 1)
         self.assertFalse(implementation.loom_observer.validate_every_call)
+        telemetry = vllm_plugin.telemetry_snapshot()
+        self.assertEqual(telemetry["implementation_count"], 1)
+        self.assertEqual(telemetry["forward_calls"], 1)
+        self.assertEqual(telemetry["forward_failures"], 0)
 
     def test_registration_is_idempotent(self) -> None:
         registrations = []
@@ -198,6 +207,9 @@ class VllmPluginTest(unittest.TestCase):
         )
         self.assertEqual(updated.loom_step_snapshot.generation, 2)
         self.assertEqual(updated.loom_step_snapshot.block_table.data_ptr, 0x600)
+        telemetry = vllm_plugin.telemetry_snapshot()
+        self.assertEqual(telemetry["metadata_builder_count"], 1)
+        self.assertEqual(telemetry["max_step_generation"], 2)
 
     def test_delegate_failure_is_recorded_and_propagated(self) -> None:
         registrations = []

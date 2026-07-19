@@ -24,7 +24,7 @@ merge combines its attention state with the remote sealed-prefix state.
 | Area | Implemented | Missing evidence or integration |
 | --- | --- | --- |
 | Rust runtime | `KvPool`, Holt catalog, planner, leases, generation-pinned `KvView`, transport handles | production pool and device transport adapters |
-| vLLM | local `CUSTOM` delegate and metadata observer | physical block to `PoolObjectRef` mapping and real-model GPU report |
+| vLLM | local `CUSTOM` delegate, metadata observer, and real-model Modal L4 report | physical block to `PoolObjectRef` mapping |
 | Attention state | Rust reference, contiguous PyTorch/FlashInfer paths, and generation-pinned FlashInfer paged executor | external engine/pool page-table binding |
 | One-node data path | NCCL Route-Q and Stage-KV harness with contiguous and paged modes; phase-instrumented Modal L4 prefix sweep | Nsight attribution and topology-comparable bare-metal sweep |
 | Cross-node data path | contracts only | NIXL/UCX/GPUDirect RDMA implementation and measurements |
@@ -49,15 +49,21 @@ descriptors for the device-side block table, slot mapping, sequence lengths,
 and query offsets. Block-table updates advance a snapshot generation. Device
 tensor values are never copied to CPU by this observer.
 
-The current adapter does not map vLLM physical block IDs to external
-`PoolObjectRef` values or install the snapshot in the Rust runtime yet, and it
-has not decoded a real model. The `integration.vllm_smoke` module is the GPU
-acceptance harness: it runs native and delegated backends in isolated processes,
-requires exact generated token equality, checks sampled logprobs within a fixed
-tolerance, and writes a hardware/version-qualified JSON report. The harness is
-implemented, but no CUDA report has been produced on the current macOS host.
-Those remain M1 exit conditions. Remote attention and split-KV execution begin
-at M2.
+The `integration.vllm_smoke` module runs native and delegated backends in
+isolated processes, requires exact generated token equality, checks sampled
+logprobs within a fixed tolerance, and writes a hardware/version-qualified JSON
+report. The July 20 Modal L4 run passed on vLLM 0.25.0 and Torch 2.11.0+cu130:
+the maximum logprob delta was 0.0, and Loom telemetry recorded 30 layer
+implementations, 1,050 forwards, zero failures, and metadata generation 34. The
+complete report is
+[modal-vllm-l4-2026-07-20.json](results/modal-vllm-l4-2026-07-20.json).
+
+This proves real engine entry, metadata capture, native-kernel delegation, and
+output equality. Its timings are not comparative performance evidence because
+the native process paid cold download/initialization first. The adapter still
+does not map vLLM physical block IDs to external `PoolObjectRef` values or
+install the snapshot in the Rust runtime. Remote attention and split-KV
+execution begin at M2.
 
 ## M2a Two-GPU Data-Path Gate
 

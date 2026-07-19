@@ -83,10 +83,11 @@ def _run_backend(args: argparse.Namespace) -> dict[str, Any]:
         raise SmokeFailure(
             f"expected vLLM 0.25.x, found {vllm.__version__}; plugin APIs are pinned"
         )
+    loom_plugin = None
     if args.backend == "CUSTOM":
-        from .vllm_plugin import register
+        from loom_attention import vllm_plugin as loom_plugin
 
-        register()
+        loom_plugin.register()
 
     prompts = list(DEFAULT_PROMPTS)
     sampling = SamplingParams(
@@ -151,6 +152,17 @@ def _run_backend(args: argparse.Namespace) -> dict[str, Any]:
                 }
             )
 
+    loom_telemetry = (
+        loom_plugin.telemetry_snapshot() if loom_plugin is not None else None
+    )
+    if loom_telemetry is not None:
+        if loom_telemetry["forward_calls"] <= 0:
+            raise SmokeFailure("Loom CUSTOM backend recorded no forward calls")
+        if loom_telemetry["forward_failures"] != 0:
+            raise SmokeFailure("Loom CUSTOM backend recorded forward failures")
+        if loom_telemetry["max_step_generation"] <= 0:
+            raise SmokeFailure("Loom CUSTOM backend recorded no metadata builds")
+
     return {
         "schema": REPORT_SCHEMA,
         "backend": args.backend,
@@ -165,6 +177,7 @@ def _run_backend(args: argparse.Namespace) -> dict[str, Any]:
         "startup_seconds": startup_seconds,
         "generation_seconds": generation_seconds,
         "median_generation_seconds": statistics.median(generation_seconds),
+        "loom_telemetry": loom_telemetry,
         "sequences": sequences,
     }
 
@@ -177,6 +190,16 @@ def _compare_run_payloads(
         differences.append("native report did not run the FLASH_ATTN backend")
     if custom.get("backend") != "CUSTOM":
         differences.append("custom report did not run the CUSTOM backend")
+    custom_telemetry = custom.get("loom_telemetry")
+    if not isinstance(custom_telemetry, dict):
+        differences.append("custom report has no Loom execution telemetry")
+    else:
+        if custom_telemetry.get("forward_calls", 0) <= 0:
+            differences.append("custom report recorded no Loom forward calls")
+        if custom_telemetry.get("forward_failures") != 0:
+            differences.append("custom report recorded Loom forward failures")
+        if custom_telemetry.get("max_step_generation", 0) <= 0:
+            differences.append("custom report recorded no Loom metadata builds")
     for field in (
         "schema",
         "model",

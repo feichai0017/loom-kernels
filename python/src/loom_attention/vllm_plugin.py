@@ -9,6 +9,7 @@ later backends, not by changing this delegate's behavior.
 from __future__ import annotations
 
 import os
+from dataclasses import asdict
 from typing import Any
 
 from .local_delegate import LocalForwardObserver
@@ -16,6 +17,25 @@ from .step_metadata import StepMetadataObserver, StepMetadataSnapshot
 
 _REGISTERED = False
 _STEP_SNAPSHOT_ATTRIBUTE = "loom_step_snapshot"
+_FORWARD_OBSERVERS: list[LocalForwardObserver] = []
+_STEP_OBSERVERS: list[StepMetadataObserver] = []
+
+
+def telemetry_snapshot() -> dict[str, Any]:
+    """Summarize process-local proof that the custom backend executed."""
+    forward = [asdict(observer.snapshot()) for observer in _FORWARD_OBSERVERS]
+    step_generations = [
+        observer.latest_generation for observer in _STEP_OBSERVERS
+    ]
+    return {
+        "implementation_count": len(forward),
+        "metadata_builder_count": len(step_generations),
+        "forward_calls": sum(item["calls"] for item in forward),
+        "forward_failures": sum(item["failures"] for item in forward),
+        "step_generations": step_generations,
+        "max_step_generation": max(step_generations, default=0),
+        "implementations": forward,
+    }
 
 
 def register() -> None:
@@ -57,6 +77,7 @@ def register() -> None:
             self._loom_step_observer = _step_observer_from_builder(
                 self, args, kwargs
             )
+            _STEP_OBSERVERS.append(self._loom_step_observer)
 
         @property
         def loom_step_observer(self) -> StepMetadataObserver:
@@ -105,6 +126,7 @@ def register() -> None:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
             self._loom_observer = _observer_from_init(args, kwargs)
+            _FORWARD_OBSERVERS.append(self._loom_observer)
 
         @property
         def loom_observer(self) -> LocalForwardObserver:
@@ -150,7 +172,8 @@ def register() -> None:
     class _LoomFlashAttentionBackend(FlashAttentionBackend):
         @staticmethod
         def get_name() -> str:
-            return "LOOM_FLASH_ATTN"
+            # vLLM indexes this value back into AttentionBackendEnum.
+            return "CUSTOM"
 
         @staticmethod
         def get_impl_cls() -> type[_LoomFlashAttentionImpl]:

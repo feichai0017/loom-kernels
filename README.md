@@ -31,13 +31,13 @@ never synchronously queries the global controller or Holt.
 
 ## Current Status
 
-The Rust lifecycle contracts, Holt catalog, planner, vLLM observer/delegate,
-output-plus-LSE merge, NCCL Route-Q harness, and generation-pinned FlashInfer
-paged-KV executor are implemented and covered by contract tests. The first
-two-L4 correctness/latency report and a phase-instrumented 4K-32K prefix sweep
-are recorded under `docs/results`. A Mooncake adapter, cross-node transport,
-Nsight-level attribution, and broader hardware evaluation are not implemented
-yet. See the
+The Rust lifecycle contracts, Holt catalog, planner, real-model vLLM
+observer/delegate, output-plus-LSE merge, NCCL Route-Q harness, and
+generation-pinned FlashInfer paged-KV executor are implemented and covered by
+tests. Modal L4 reports for the vLLM adapter and the phase-instrumented 4K-32K
+two-GPU sweep are recorded under `docs/results`. The physical vLLM block bridge,
+Mooncake adapter, cross-node transport, Nsight-level attribution, and broader
+hardware evaluation are not implemented yet. See the
 [implementation status](docs/status.md) for exact boundaries.
 
 ## Build

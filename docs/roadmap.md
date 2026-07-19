@@ -33,7 +33,8 @@ Exit: `cargo test --workspace` validates ownership and state-machine invariants.
 
 ### M1: Engine-Local Backend
 
-Status: adapter and acceptance harness implemented; GPU acceptance report open.
+Status: real-model local delegate acceptance complete on Modal L4; physical
+block-to-pool binding remains open.
 
 - add a vLLM `AttentionBackend` adapter;
 - delegate to the existing local kernel;
@@ -42,7 +43,11 @@ Status: adapter and acceptance harness implemented; GPU acceptance report open.
   generation-pinned `KvView`;
 - verify output equality and fallback behavior.
 
-Exit: one real model decodes through the adapter with no remote execution.
+Local acceptance exit: complete. One real model decodes through the adapter with
+no remote execution and exact native-output equality.
+
+Integration exit: vLLM physical block IDs resolve to lease-covered
+`PoolObjectRef` generations without device-to-host table readback.
 
 ### M2a: One-Node Route-Q Protocol
 

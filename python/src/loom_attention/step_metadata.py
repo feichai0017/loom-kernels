@@ -198,6 +198,12 @@ class StepMetadataObserver:
             self._next_generation += 1
         return generation
 
+    @property
+    def latest_generation(self) -> int:
+        """Return the latest captured generation without exposing tensors."""
+        with self._lock:
+            return self._next_generation - 1
+
     def _validate_common_metadata(
         self,
         *,

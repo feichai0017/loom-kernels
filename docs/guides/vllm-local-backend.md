@@ -47,6 +47,19 @@ VLLM_PLUGINS=loom \
 `--enforce-eager` keeps the M1 validation path outside CUDA Graph capture. Graph
 support is intentionally deferred until the remote execution contract is fixed.
 
+Run the isolated native-versus-CUSTOM gate on one Modal L4 with:
+
+```bash
+uvx --from modal modal run python/tests/integration/modal_vllm.py \
+  --report build/modal/vllm-l4.json
+```
+
+The runner uses the official `vllm/vllm-openai:v0.25.0` image and a persistent
+Hugging Face model cache. Its Modal control process and vLLM workload use
+different Python interpreters intentionally: `/usr/local/bin/python` hosts the
+Modal runtime, while `/usr/bin/python3` retains the official image's Torch and
+vLLM installation.
+
 ## Contract
 
 The first forward checks:
@@ -87,8 +100,9 @@ device tensor descriptors.
 ## Current Validation Boundary
 
 CI tests registration, forwarding, metadata building, block-table replacement,
-zero device readback, layout rejection, error propagation, and plugin
-idempotence with fake tensor and vLLM modules.
+zero device readback, layout rejection, error propagation, execution telemetry,
+and plugin idempotence with fake tensor and vLLM modules. The Modal gate adds a
+real CUDA/model acceptance layer but remains outside normal CPU-only CI.
 
 ## CUDA Acceptance Gate
 
@@ -123,7 +137,19 @@ differed, and `2` means the environment or runtime contract failed. The JSON
 report retains both raw runs and all differences. A report must include the GPU,
 vLLM version, model revision, and workload settings to be reviewable.
 
-The current macOS development host has no CUDA runtime, so the CUDA gate has not
-yet run. M1 remains incomplete until a real report is produced. Even after it
-passes, physical vLLM block IDs still need to be joined with external
-`PoolObjectRef` values and installed in the Rust node runtime.
+The July 20 Modal run used an NVIDIA L4, vLLM 0.25.0, Torch 2.11.0+cu130,
+Python 3.12.13, and the revision-pinned SmolLM2 model. Native `FLASH_ATTN` and
+Loom `CUSTOM` produced identical token IDs and an exact `0.0` maximum sampled
+logprob delta across six measured sequences. Loom recorded 30 attention
+implementations, 1,050 forwards, zero forward failures, one metadata builder,
+and a maximum step generation of 34. The complete report is
+[modal-vllm-l4-2026-07-20.json](../results/modal-vllm-l4-2026-07-20.json).
+
+Startup and generation timing in this report is not a performance comparison:
+the native process ran first and paid model download and cold initialization,
+while the CUSTOM process reused the container and model cache. This gate proves
+real model compatibility, metadata capture, delegation, and output equality.
+
+Physical vLLM block IDs still need to be joined with external `PoolObjectRef`
+values and installed as lease-covered, generation-pinned views in the node
+runtime. No remote attention occurs in this M1 gate.
