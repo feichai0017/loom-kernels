@@ -1,4 +1,8 @@
-# Distributed Attention MVP
+# Implementation Status
+
+This document is the source of truth for what the `main` branch implements and
+what still requires hardware evidence. Future work belongs in
+[roadmap.md](roadmap.md).
 
 ## Supported Shape
 
@@ -14,6 +18,21 @@ The M2 remote-prefix request is
 `Attend(Q, KvView, no-append, layout, causal-mask, scale) -> (O, LSE)`. Historical
 KV remains on GPU 1. K_new/V_new stay with the local active tail; the exact
 merge combines its attention state with the remote sealed-prefix state.
+
+## Implementation Map
+
+| Area | Implemented | Missing evidence or integration |
+| --- | --- | --- |
+| Rust runtime | `KvPool`, Holt catalog, planner, leases, generation-pinned `KvView`, transport handles | production pool and device transport adapters |
+| vLLM | local `CUSTOM` delegate and metadata observer | physical block to `PoolObjectRef` mapping and real-model GPU report |
+| Attention state | Rust reference plus PyTorch and FlashInfer `(O, LSE)` paths | paged-KV executor |
+| One-node data path | NCCL Route-Q and Stage-KV benchmark harness | executed two-GPU hardware report |
+| Cross-node data path | contracts only | NIXL/UCX/GPUDirect RDMA implementation and measurements |
+
+The Python package keeps reusable kernels in `attention_state.py`, benchmark
+execution in `two_gpu_benchmark.py`, and command-line handling in
+`two_gpu_smoke.py`. Engine integration remains in the `vllm_*`,
+`local_delegate`, and `step_metadata` modules.
 
 ## M1 Engine-Local Baseline
 

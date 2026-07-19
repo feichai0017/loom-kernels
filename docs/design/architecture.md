@@ -1,4 +1,4 @@
-# Loom Architecture v3
+# Architecture
 
 ## Positioning
 
@@ -83,26 +83,23 @@ the operation, but the external pool remains authoritative for its lifetime.
 
 ## Split-KV Attention
 
-For KV shard `i`, the worker returns:
+For KV segment `i`, the worker returns an attention state:
 
 ```text
-m_i = max(logits_i)
-l_i = sum(exp(logits_i - m_i))
-u_i = sum(exp(logits_i - m_i) * V_i)
+O_i = softmax(S_i) V_i
+LSE_i = logsumexp(S_i)
 ```
 
 The merger computes:
 
 ```text
-m = max(m_i)
-l = sum(exp(m_i - m) * l_i)
-u = sum(exp(m_i - m) * u_i)
-O = u / l
+LSE = logsumexp_i(LSE_i)
+O = sum_i(exp(LSE_i - LSE) * O_i)
 ```
 
-This is mathematically equivalent to attention over concatenated KV shards.
-Communication grows with query/output dimensions rather than historical KV
-length.
+This is mathematically equivalent to attention over concatenated KV segments
+and matches the state contract exposed by FlashInfer. Communication grows with
+query/output dimensions rather than historical KV length.
 
 ## Catalog Semantics
 

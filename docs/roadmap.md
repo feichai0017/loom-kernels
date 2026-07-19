@@ -1,4 +1,7 @@
-# Loom Platform Plan v3
+# Roadmap
+
+This document defines planned milestones and exit criteria. For current
+implementation status, see [status.md](status.md).
 
 ## Research Question
 
@@ -18,6 +21,8 @@ follow only after the decode data path is measured.
 
 ### M0: Architecture Break
 
+Status: implementation complete.
+
 - remove the built-in store and byte transfer product path;
 - establish dependency-clean types, pool, catalog, planner, runtime, attention,
   and tensor-transport modules in one Rust package;
@@ -28,6 +33,8 @@ Exit: `cargo test --workspace` validates ownership and state-machine invariants.
 
 ### M1: Engine-Local Backend
 
+Status: adapter and acceptance harness implemented; GPU acceptance report open.
+
 - add a vLLM `AttentionBackend` adapter;
 - delegate to the existing local kernel;
 - translate vLLM block tables and layouts into Loom types;
@@ -37,18 +44,35 @@ Exit: `cargo test --workspace` validates ownership and state-machine invariants.
 
 Exit: one real model decodes through the adapter with no remote execution.
 
-### M2: One-Node Route-Q
+### M2a: One-Node Route-Q Protocol
+
+Status: reference and contiguous-KV FlashInfer paths implemented; two-GPU
+hardware report open.
 
 - place sealed prefix shards on a second GPU;
 - send Q through CUDA P2P or NCCL;
-- execute remote partial attention;
-- return output/LSE statistics and merge with the local active tail.
+- execute remote attention over the sealed prefix;
+- return output/LSE state and merge with the local active tail;
 - compare end-to-end Route-Q and Stage-KV latency under one deterministic
   workload before replacing the reference kernel.
 
 Exit: split execution matches the unsharded reference within dtype tolerance.
 
+### M2b: Paged-KV Executor
+
+Status: next implementation milestone.
+
+- consume generation-pinned page tables without repacking contiguous KV;
+- reuse planned FlashInfer wrappers and workspaces across decode steps;
+- return output/LSE state without host synchronization;
+- report kernel, transfer, and merge time separately.
+
+Exit: the paged executor passes the same two-GPU correctness gate and produces
+a hardware-qualified report.
+
 ### M3: External Pool
+
+Status: interface only; production adapter not implemented.
 
 - implement the Mooncake `KvPool` adapter;
 - publish sealed blocks and consume ordered residency events;
@@ -59,6 +83,8 @@ Exit: restart recovery never serves a stale object or handle.
 
 ### M4: Cross-Node Data Path
 
+Status: contracts only; transport not implemented.
+
 - implement NIXL/UCX or equivalent registered-device transport;
 - batch query and partial-result transfers;
 - overlap communication, remote kernels, and local-tail attention;
@@ -68,6 +94,8 @@ Exit: end-to-end results report TTFT, TPOT, throughput, goodput, queueing, and
 communication bytes against fetch-KV and local-only baselines.
 
 ### M5: Heterogeneous Executors
+
+Status: planned.
 
 - add CPU DRAM attention and capability-aware dispatch;
 - evaluate GPU, CPU, and staged SSD paths;

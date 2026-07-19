@@ -43,7 +43,7 @@ What to learn:
 
 Loom tasks:
 
-- implement one-node Route-Q and exact partial-softmax merge;
+- implement one-node Route-Q and exact output-plus-LSE merge;
 - compare Local, RouteQuery, StageKv, and Sharded under one workload;
 - measure queueing, Q/O transport, kernels, merge, and exposed wait separately.
 

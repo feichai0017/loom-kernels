@@ -25,37 +25,16 @@ never synchronously queries the global controller or Holt.
 | `crates/loom-attention` | one Rust package with runtime, pool, catalog, planner, transport, and attention modules |
 | `loom-control` | slow-path catalog/scheduler binary from the `loom-attention` package |
 | `loom-worker` | attention-worker control binary from the `loom-attention` package |
-| `python/loom_attention` | out-of-tree vLLM attention backend adapters |
+| `python/loom_attention` | vLLM adapters, attention-state executors, and GPU acceptance harnesses |
 
-## Implemented
+## Current Status
 
-- one dependency-clean Rust package with separately deployable binaries;
-- external `KvPool` API with object generations, ordered events, and read leases;
-- Holt-backed persistent object catalog plus worker-epoch-aware hot directory;
-- SLO cost comparison for local, route-query, KV-stage, and sharded execution;
-- exact split-KV output-plus-LSE merge with reference correctness tests;
-- node-local single-writer step state, generation-pinned `KvView`, lease
-  validation, and active-tail sealing;
-- handle-based tensor transport API with registered-region bounds checks;
-- control-only service endpoints for the controller and attention worker;
-- vLLM `CUSTOM` backend that validates the local tensor contract and delegates
-  unchanged execution to vLLM FlashAttention;
-- vLLM metadata-builder wrapper that records generation-checked paged-KV tensor
-  descriptors without reading device tensor contents.
-- isolated CUDA A/B harness that compares native FlashAttention with the
-  Loom delegate using exact token IDs and sampled-logprob tolerance.
-- two-GPU NCCL harness for Q-only remote-prefix execution, exact local-tail
-  merge, and a Stage-KV payload/latency baseline.
-- optional FlashInfer decode and cascade-merge kernels over contiguous NHD KV,
-  with the PyTorch implementation retained as the correctness oracle.
-
-## Not Implemented Yet
-
-- SGLang and remote-execution attention backend adapters;
-- an executed two-GPU FlashInfer report and a paged-KV executor;
-- production CUDA IPC, NCCL, NIXL, or GPUDirect RDMA transports;
-- a production Mooncake adapter;
-- remote GPU end-to-end latency or throughput claims.
+The Rust lifecycle contracts, Holt catalog, planner, vLLM observer/delegate,
+output-plus-LSE merge, NCCL Route-Q harness, and optional contiguous-KV
+FlashInfer path are implemented and covered by contract tests. A production
+paged-KV executor, Mooncake adapter, cross-node transport, and hardware-backed
+performance report are not implemented yet. See the
+[implementation status](docs/status.md) for exact boundaries.
 
 ## Build
 
@@ -90,10 +69,7 @@ cargo run -p loom-attention --bin loom-control -- --bind 127.0.0.1:8080
 cargo run -p loom-attention --bin loom-worker -- --bind 127.0.0.1:8090
 ```
 
-See [architecture](docs/architecture.md), [platform plan](docs/platform-plan.md),
-[vLLM local backend](docs/vllm-local-backend.md),
-[two-GPU Route-Q](docs/two-gpu-route-q.md), and
-[protocol invariants](docs/protocols.md).
+Start with the [documentation index](docs/README.md).
 
 ## License
 

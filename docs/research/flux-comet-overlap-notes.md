@@ -190,8 +190,8 @@ preserving expert compute efficiency.
 P0: Build the one-node Route-Q path.
 
 - Run the sealed prefix on a second GPU and the active tail on the model GPU.
-- Return online-softmax statistics and compare the merged output with unsharded
-  attention.
+- Return output-plus-LSE attention states and compare the merged output with
+  unsharded attention.
 
 P1: Build a remote-depth sweep.
 

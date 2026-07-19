@@ -151,7 +151,8 @@ P0: Implement the one-node Route-Q path.
 
 - Send Q to a second GPU holding a sealed prefix.
 - Run local-tail and remote-prefix attention concurrently.
-- Merge exact online-softmax statistics and compare against local attention.
+- Merge exact output-plus-LSE attention states and compare against local
+  attention.
 
 P1: Compare execution modes.
 
