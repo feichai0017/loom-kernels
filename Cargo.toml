@@ -1,73 +1,51 @@
 [workspace]
 members = [
-    ".",
-    "crates/quillcache-core",
-    "crates/quillcache-store",
-    "crates/quillcache-transfer-engine",
-    "crates/quillcache-cuda",
+    "crates/quillcache-types",
+    "crates/quillcache-pool-api",
+    "crates/quillcache-pool-local",
+    "crates/quillcache-catalog",
+    "crates/quillcache-scheduler",
+    "crates/quillcache-attention-api",
+    "crates/quillcache-runtime",
+    "crates/quillcache-tensor-transport",
+    "services/quillcache-control",
+    "services/quillcache-attention-worker",
 ]
 default-members = [
-    ".",
-    "crates/quillcache-core",
-    "crates/quillcache-store",
-    "crates/quillcache-transfer-engine",
-    "crates/quillcache-cuda",
+    "crates/quillcache-types",
+    "crates/quillcache-pool-api",
+    "crates/quillcache-pool-local",
+    "crates/quillcache-catalog",
+    "crates/quillcache-scheduler",
+    "crates/quillcache-attention-api",
+    "crates/quillcache-runtime",
+    "crates/quillcache-tensor-transport",
+    "services/quillcache-control",
+    "services/quillcache-attention-worker",
 ]
-# quillcache-cuda is a workspace member, but its DEFAULT build is a host-only stub
-# (no cudarc), so `cargo build`/`test`/CI never need a CUDA toolkit. The real GPU
-# tier compiles with `--features cuda` — cudarc's `dynamic-loading` builds even
-# without CUDA present (it dlopen's libcuda at runtime) and executes on a GPU box.
 resolver = "2"
 
+[workspace.package]
+version = "2.0.0-alpha.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/feichai0017/quillcache"
+
 [workspace.dependencies]
+async-trait = "0.1"
 axum = "0.8"
 clap = { version = "4.5.23", features = ["derive"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+holt = "0.5.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-serde_yaml = "0.9"
 thiserror = "2.0.12"
-tokio = { version = "1.42", features = ["macros", "net", "rt-multi-thread", "signal"] }
+tokio = { version = "1.42", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-[package]
-name = "quillcache"
-version = "1.0.0-alpha.1"
-edition = "2021"
-description = "Vendor-neutral KV cache control plane and evaluation platform for LLM serving"
-license = "MIT"
-repository = "https://github.com/feichai0017/quillcache"
-readme = "README.md"
-keywords = ["llm", "kv-cache", "inference", "serving", "control-plane"]
-categories = ["caching", "development-tools"]
-
-[dependencies]
-clap = { workspace = true }
-axum = { workspace = true }
-bytes = "1"
-futures-util = "0.3"
-reqwest = { workspace = true }
-quillcache-core = { version = "1.0.0-alpha.1", path = "crates/quillcache-core" }
-quillcache-store = { version = "1.0.0-alpha.1", path = "crates/quillcache-store" }
-quillcache-transfer-engine = { version = "1.0.0-alpha.1", path = "crates/quillcache-transfer-engine" }
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde_yaml = { workspace = true }
-thiserror = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
-
-[features]
-# Optional RocksDB (LSM) index backend — forwards to the feature-gated module in
-# quillcache-core. Off by default so `cargo install quillcache` stays light and
-# the core CI job needs no C++/libclang toolchain.
-rocksdb = ["quillcache-core/rocksdb"]
-# Optional Holt (persistent ART) index backend. Pure Rust; off by default to keep
-# the installed binary minimal. Also lets the online gateway back its residency
-# index with Holt (`index: holt` in the gateway config).
-holt = ["quillcache-core/holt"]
-# Multi-master HA for the store-master binary: etcd leader election. Forwards to
-# quillcache-store's etcd feature (pulls etcd-client, build needs protoc).
-etcd = ["quillcache-store/etcd"]
+quillcache-attention-api = { path = "crates/quillcache-attention-api" }
+quillcache-catalog = { path = "crates/quillcache-catalog" }
+quillcache-pool-api = { path = "crates/quillcache-pool-api" }
+quillcache-scheduler = { path = "crates/quillcache-scheduler" }
+quillcache-tensor-transport = { path = "crates/quillcache-tensor-transport" }
+quillcache-types = { path = "crates/quillcache-types" }

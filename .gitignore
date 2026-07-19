@@ -22,13 +22,19 @@ GEMINI.md
 /docs/book
 /benchdata
 
-# Python (bench/ bridge/ deploy/ scripts)
+# Python engine adapters and experiments
 __pycache__/
 *.pyc
 .venv/
 
-# Astro docs site (web/)
-web/node_modules/
-web/dist/
-web/.astro/
+# Native extension build output
+native/build/
+python/build/
+
+# Runtime state
+.quillcache/
+
+# Removed v1 documentation site artifacts that may remain in local checkouts
+web/
+
 papers/

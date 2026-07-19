@@ -1,0 +1,12 @@
+[package]
+name = "quillcache-attention-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Distributed core-attention contracts and exact partial-softmax merge"
+
+[dependencies]
+quillcache-types.workspace = true
+serde.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "quillcache-attention-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Distributed partial-attention worker for QuillCache"
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+quillcache-types.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

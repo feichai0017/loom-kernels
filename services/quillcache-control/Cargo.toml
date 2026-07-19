@@ -1,0 +1,16 @@
+[package]
+name = "quillcache-control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Global catalog and scheduling service for QuillCache"
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+quillcache-catalog.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

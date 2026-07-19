@@ -1,0 +1,15 @@
+[package]
+name = "quillcache-pool-local"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "In-memory reference KV pool for QuillCache tests and local development"
+
+[dependencies]
+async-trait.workspace = true
+quillcache-pool-api.workspace = true
+quillcache-types.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

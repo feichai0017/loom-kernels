@@ -1,0 +1,16 @@
+[package]
+name = "quillcache-tensor-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Handle-based tensor transport contracts for distributed attention"
+
+[dependencies]
+async-trait.workspace = true
+quillcache-types.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "quillcache-scheduler"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "SLO-aware placement and distributed-attention planning"
+
+[dependencies]
+quillcache-attention-api.workspace = true
+quillcache-types.workspace = true
+serde.workspace = true
+thiserror.workspace = true

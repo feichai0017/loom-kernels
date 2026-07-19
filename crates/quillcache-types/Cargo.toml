@@ -1,0 +1,10 @@
+[package]
+name = "quillcache-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Engine-neutral state and capability types for QuillCache"
+
+[dependencies]
+serde.workspace = true
