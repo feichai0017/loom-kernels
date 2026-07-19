@@ -26,7 +26,7 @@ merge combines its attention state with the remote sealed-prefix state.
 | Rust runtime | `KvPool`, Holt catalog, planner, leases, generation-pinned `KvView`, transport handles | production pool and device transport adapters |
 | vLLM | local `CUSTOM` delegate and metadata observer | physical block to `PoolObjectRef` mapping and real-model GPU report |
 | Attention state | Rust reference, contiguous PyTorch/FlashInfer paths, and generation-pinned FlashInfer paged executor | external engine/pool page-table binding |
-| One-node data path | NCCL Route-Q and Stage-KV harness with contiguous and paged modes | executed two-GPU hardware report and phase-level timings |
+| One-node data path | NCCL Route-Q and Stage-KV harness with contiguous and paged modes; Modal two-L4 report | phase-level timings and topology-comparable hardware sweep |
 | Cross-node data path | contracts only | NIXL/UCX/GPUDirect RDMA implementation and measurements |
 
 The installable Python package lives under `python/src/loom_attention`, while
@@ -93,9 +93,21 @@ FP32 LSE tensors without reading page-table values on the host.
 The two-GPU gate now has a paged mode for Route-Q and Stage-KV. Its deterministic
 fixture converts contiguous generated inputs into pages once before warmup;
 measured iterations consume or receive into those pages directly. This proves
-the acceptance-path shape but is not an external-pool zero-copy result. No
-Linux two-GPU report has been produced yet, and transfer/kernel/merge phase
-timing is not separated in the current report.
+the acceptance-path shape but is not an external-pool zero-copy result.
+
+The first Linux report was produced on Modal using two L4 GPUs, PyTorch
+2.9.1+cu128, FlashInfer 0.6.15, and NCCL 2.27.5. For a 4K FP16 prefix, 16-token
+tail, one decode row, 10 warmups, and 100 measured iterations, both Route-Q and
+Stage-KV passed the independent reference at `atol=rtol=2e-3`. Route-Q measured
+0.514 ms p50 and 0.753 ms p99 while transferring 16,512 bytes; Stage-KV measured
+1.866 ms p50 and 1.906 ms p99 while transferring 16,777,216 bytes. The complete
+report is [modal-l4-4k-2026-07-19.json](results/modal-l4-4k-2026-07-19.json).
+
+This is one environment, not a general performance claim. That container
+reported `device_peer_access=false`, and gVisor denied the NVML topology query,
+so the result does not characterize NVLink, GPUDirect RDMA, or bare-metal PCIe.
+The report still lacks separate transfer, remote-kernel, local-tail, and merge
+timings.
 
 ## Correctness Gate
 

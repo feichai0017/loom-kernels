@@ -46,8 +46,8 @@ Exit: one real model decodes through the adapter with no remote execution.
 
 ### M2a: One-Node Route-Q Protocol
 
-Status: reference and contiguous-KV FlashInfer paths implemented; two-GPU
-hardware report open.
+Status: implementation complete and first Modal two-L4 report produced; broader
+hardware and workload sweep open.
 
 - place sealed prefix shards on a second GPU;
 - send Q through CUDA P2P or NCCL;
@@ -60,8 +60,8 @@ Exit: split execution matches the unsharded reference within dtype tolerance.
 
 ### M2b: Paged-KV Executor
 
-Status: executor and two-GPU acceptance path implemented; hardware report,
-external page-table binding, and phase-level timing open.
+Status: executor and two-GPU correctness gate validated on Modal L4; external
+page-table binding and phase-level timing open.
 
 - consume generation-pinned page tables without repacking contiguous KV;
 - reuse planned FlashInfer wrappers and workspaces across decode steps;

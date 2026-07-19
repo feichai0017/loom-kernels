@@ -94,6 +94,34 @@ python3 -m integration.two_gpu_smoke run \
 Repeat at 4K, 8K, 16K, 32K, and the largest feasible prefix. Keep every other
 argument fixed when comparing the two paths.
 
+## Run On Modal
+
+With a configured Modal profile, run the same gate on two co-located L4 GPUs:
+
+```bash
+uvx --from modal modal run python/tests/integration/modal_two_gpu.py \
+  --prefix-tokens 4096 \
+  --iterations 100 \
+  --report build/modal/two-gpu-l4.json
+```
+
+The function uses an ephemeral `L4:2` container and shuts down after writing the
+report locally. The report includes the requested resource, GPU topology,
+PyTorch/CUDA/FlashInfer versions, and the normal correctness and latency fields.
+The Modal launcher remains under `python/tests/integration` and is excluded from
+the installable wheel.
+
+On a workstation that requires an HTTP or SOCKS proxy for outbound traffic,
+install Modal's proxy extra and export the proxy variables before the same
+command:
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:7890 \
+ALL_PROXY=socks5h://127.0.0.1:7890 \
+uvx --from 'modal[api-proxy-support]' modal run \
+  python/tests/integration/modal_two_gpu.py
+```
+
 ## Route-Q Payload
 
 Rank 0 sends Q. Rank 1 returns the attention output in the request dtype and
@@ -133,8 +161,9 @@ A reviewable report must contain:
 - p50/p99 latency and payload bytes for both paths;
 - explicit kernel, KV layout, paged-executor, and fixture-repack metadata.
 
-The current macOS development host cannot produce this report. M2a remains open
-until the harness runs on a Linux CUDA machine with two GPUs.
+The macOS development host cannot produce this report locally. The first Linux
+report was produced through the Modal launcher on two L4 GPUs; broader topology
+and workload coverage remains open.
 
 `--attention-backend reference` uses the PyTorch oracle for every path.
 `--attention-backend flashinfer` uses FlashInfer

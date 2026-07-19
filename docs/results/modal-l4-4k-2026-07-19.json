@@ -1,0 +1,93 @@
+{
+  "cloud": {
+    "provider": "Modal",
+    "requested_gpu": "L4:2",
+    "runner_stderr": "/usr/local/lib/python3.11/site-packages/torch/distributed/distributed_c10d.py:4876: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.\n  warnings.warn(  # warn only once\n[rank0]:[W719 15:37:24.553359130 ProcessGroupNCCL.cpp:5072] Guessing device ID based on global rank. This can cause a hang if rank to GPU mapping is heterogeneous. You can specify device_id in init_process_group()\n[rank1]:[W719 15:37:24.109448206 ProcessGroupNCCL.cpp:4004] Warning: An unbatched P2P op (send/recv) was called on this ProcessGroup with size 2.  In lazy initialization mode, this will result in a new 2-rank NCCL communicator to be created. (function operator())\n[rank0]:[W719 15:37:24.109453986 ProcessGroupNCCL.cpp:4004] Warning: An unbatched P2P op (send/recv) was called on this ProcessGroup with size 2.  In lazy initialization mode, this will result in a new 2-rank NCCL communicator to be created. (function operator())\n/usr/local/lib/python3.11/site-packages/torch/distributed/distributed_c10d.py:4876: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.\n  warnings.warn(  # warn only once\n/usr/local/lib/python3.11/site-packages/torch/distributed/distributed_c10d.py:4876: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.\n  warnings.warn(  # warn only once\n",
+    "runner_stdout": "Loom two-GPU smoke PASSED; Route-Q p50=0.514 ms, Stage-KV p50=1.866 ms\n",
+    "topology": "topo_exit_code=255\ntopo_stderr=\ninventory_exit_code=0\nGPU 0: NVIDIA L4 (UUID: GPU-5061bc81-c1ad-c34a-cd3c-4bceb521d581)\nGPU 1: NVIDIA L4 (UUID: GPU-37255a0a-0ed9-9b1f-0c19-6395bcb44af6)\n",
+    "versions": "exit_code=0\ntorch=2.9.1+cu128\ncuda=12.8\nflashinfer=0.6.15\n"
+  },
+  "correctness": {
+    "atol": 0.002,
+    "route_query": {
+      "max_absolute_error": 6.103515625e-05,
+      "max_relative_error": 1.01953125,
+      "passed": true
+    },
+    "rtol": 0.002,
+    "stage_kv": {
+      "max_absolute_error": 6.103515625e-05,
+      "max_relative_error": 1.05859375,
+      "passed": true
+    }
+  },
+  "created_at": "2026-07-19T15:38:33.954032+00:00",
+  "environment": {
+    "cuda": "12.8",
+    "device_peer_access": false,
+    "devices": [
+      {
+        "compute_capability": "8.9",
+        "index": 0,
+        "multiprocessor_count": 58,
+        "name": "NVIDIA L4",
+        "total_memory_bytes": 23659151360
+      },
+      {
+        "compute_capability": "8.9",
+        "index": 1,
+        "multiprocessor_count": 58,
+        "name": "NVIDIA L4",
+        "total_memory_bytes": 23659151360
+      }
+    ],
+    "nccl": "2.27.5",
+    "platform": "Linux-4.19.0-gvisor-x86_64-with-glibc2.35",
+    "python": "3.11.5",
+    "torch": "2.9.1+cu128"
+  },
+  "implementation": {
+    "attention_backend": "flashinfer-paged",
+    "attention_kernel": "FlashInfer BatchDecodeWithPagedKVCacheWrapper",
+    "fixture_repacked_before_timing": true,
+    "kv_layout": "paged NHD",
+    "merge_kernel": "FlashInfer merge_states",
+    "paged_executor": true,
+    "production_kernel": true,
+    "transport": "torch.distributed NCCL point-to-point"
+  },
+  "passed": true,
+  "route_query": {
+    "max_ms": 0.8341820000055122,
+    "min_ms": 0.4690600000003542,
+    "p50_ms": 0.5139665000015725,
+    "p99_ms": 0.7530574400040283,
+    "payload_bytes": 16512
+  },
+  "schema_version": 1,
+  "stage_kv": {
+    "max_ms": 2.0578409999956193,
+    "min_ms": 1.820026999993729,
+    "p50_ms": 1.8664130000018986,
+    "p99_ms": 1.9063066499893473,
+    "payload_bytes": 16777216
+  },
+  "stage_over_route_p50": 3.631390372711428,
+  "workload": {
+    "atol": 0.002,
+    "attention_backend": "flashinfer-paged",
+    "dtype": "float16",
+    "head_dim": 128,
+    "iterations": 100,
+    "kv_heads": 8,
+    "page_size": 16,
+    "prefix_tokens": 4096,
+    "query_heads": 32,
+    "rows": 1,
+    "rtol": 0.002,
+    "seed": 7,
+    "tail_tokens": 16,
+    "timeout_seconds": 120,
+    "warmup": 10
+  }
+}
