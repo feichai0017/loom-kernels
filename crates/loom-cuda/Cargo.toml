@@ -1,0 +1,25 @@
+[package]
+name = "loom-cuda"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Safe Rust executor and references for Loom CUDA attention kernels"
+
+[features]
+default = []
+cuda = ["loom-cuda-sys/cuda"]
+
+[dependencies]
+clap.workspace = true
+half.workspace = true
+loom-attention = { path = "../loom-attention" }
+loom-cuda-sys = { path = "../loom-cuda-sys" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[[bin]]
+name = "loom-fused-tail-bench"
+path = "src/bin/loom-fused-tail-bench.rs"
+required-features = ["cuda"]

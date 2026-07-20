@@ -42,14 +42,17 @@ sealed object through a generation-checked `PoolObjectRef` and read lease.
 
 ## Repository Boundaries
 
-The Rust workspace has one package, `loom-attention`, with public `types`, `pool`,
-`catalog`, `scheduler`, `attention`, `runtime`, and `transport` modules. The
-same package builds the `loom-control` and `loom-worker` binaries. These
-contracts share one release cadence; separate packages previously added
-manifests and dependency plumbing without an independent release boundary.
+The accelerator-independent core remains one package, `loom-attention`, with
+public `types`, `pool`, `catalog`, `scheduler`, `attention`, `runtime`, and
+`transport` modules. The same package builds the `loom-control` and
+`loom-worker` binaries.
 
-Native CUDA kernels and Python engine adapters remain outside the Rust package
-because they have independent language and accelerator toolchains.
+Two opt-in support packages keep CUDA out of the default build:
+`loom-cuda-sys` owns the raw C ABI and `nvcc` linkage, while `loom-cuda` owns
+generation-pinned tensor validation, a CPU oracle, and executor/benchmark code.
+The native kernels live under `cuda` and are shared by Rust and the optional
+PyTorch extension. Python engine adapters remain a separate installable package
+because they follow the engine and PyTorch release cadence.
 
 ## Slow And Fast Paths
 
@@ -122,6 +125,12 @@ O = sum_i(exp(LSE_i - LSE) * O_i)
 This is mathematically equivalent to attention over concatenated KV segments
 and matches the state contract exposed by FlashInfer. Communication grows with
 query/output dimensions rather than historical KV length.
+
+For a bounded local active tail, the optional fused CUDA executor substitutes
+the tail logits directly into the equation above. It computes the combined LSE
+and weighted output without materializing a local `(O_i, LSE_i)` pair. This is
+an execution optimization only; it does not change the split-KV protocol or
+the external pool's ownership semantics.
 
 ## Catalog Semantics
 

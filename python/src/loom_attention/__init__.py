@@ -16,6 +16,7 @@ from .block_binding import (
 )
 
 from .local_delegate import LocalForwardObserver, TensorContractError
+from .cuda_ops import fused_tail_attention_merge, load_cuda_extension
 from .paged_executor import (
     FlashInferPagedExecutor,
     PagedKvContractError,
@@ -35,7 +36,9 @@ __all__ = [
     "BlockBindingSnapshot",
     "CacheTensorDescriptor",
     "ExternalBlockBinding",
+    "fused_tail_attention_merge",
     "LocalForwardObserver",
+    "load_cuda_extension",
     "FlashInferPagedExecutor",
     "PagedKvContractError",
     "PagedKvView",

@@ -6,6 +6,7 @@ from unittest.mock import patch
 from integration.two_gpu_benchmark import (
     BenchmarkConfig,
     _residual_samples,
+    _route_residual_samples,
     percentile,
     projected_transfer_bytes,
 )
@@ -38,6 +39,16 @@ class TwoGpuSmokeContractTest(unittest.TestCase):
     def test_rejects_unknown_attention_backend(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported attention backend"):
             BenchmarkConfig(attention_backend="unknown").validate()
+
+    def test_rejects_unknown_route_strategy(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported Route-Q strategy"):
+            BenchmarkConfig(route_strategy="unknown").validate()
+
+    def test_fused_route_strategy_enforces_kernel_bounds(self) -> None:
+        with self.assertRaisesRegex(ValueError, "1..=64 tail tokens"):
+            BenchmarkConfig(route_strategy="fused", tail_tokens=0).validate()
+        with self.assertRaisesRegex(ValueError, "head_dim <= 256"):
+            BenchmarkConfig(route_strategy="fused", head_dim=512).validate()
 
     def test_rejects_invalid_precondition_configuration(self) -> None:
         with self.assertRaisesRegex(ValueError, "values must be positive"):
@@ -73,6 +84,20 @@ class TwoGpuSmokeContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "sample counts must match"):
             _residual_samples([1.0, 2.0], [0.2])
 
+    def test_route_residual_tracks_each_strategy_critical_path(self) -> None:
+        sequential = _route_residual_samples(
+            [2.0], [0.8], [0.3], [0.1], strategy="sequential"
+        )
+        overlap = _route_residual_samples(
+            [2.0], [0.8], [0.3], [0.1], strategy="overlap"
+        )
+        fused = _route_residual_samples(
+            [2.0], [0.8], [], [0.4], strategy="fused"
+        )
+        self.assertAlmostEqual(sequential[0], 0.8)
+        self.assertAlmostEqual(overlap[0], 1.1)
+        self.assertAlmostEqual(fused[0], 0.8)
+
     def test_plan_command_does_not_import_torch(self) -> None:
         output = io.StringIO()
         with patch("sys.stdout", output):
@@ -91,6 +116,8 @@ class TwoGpuSmokeContractTest(unittest.TestCase):
                     "flashinfer-paged",
                     "--page-size",
                     "32",
+                    "--route-strategy",
+                    "overlap",
                 ]
             )
         self.assertEqual(status, 0)
@@ -100,6 +127,7 @@ class TwoGpuSmokeContractTest(unittest.TestCase):
             report["workload"]["attention_backend"], "flashinfer-paged"
         )
         self.assertEqual(report["workload"]["page_size"], 32)
+        self.assertEqual(report["workload"]["route_strategy"], "overlap")
         self.assertGreater(report["payload_bytes"]["stage_kv_total"], 0)
 
     def test_run_reports_environment_failure_as_exit_two(self) -> None:

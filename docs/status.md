@@ -26,7 +26,8 @@ merge combines its attention state with the remote sealed-prefix state.
 | Rust runtime | `KvPool`, Holt catalog, planner, leases, generation-pinned `KvView`, transport handles | production pool and device transport adapters |
 | vLLM | local `CUSTOM` delegate, metadata observer, physical-block `KVConnector` bridge, and real-model Modal L4 reports | pool lookup/load and physical block to `PoolObjectRef` mapping |
 | Attention state | Rust reference, contiguous PyTorch/FlashInfer paths, and generation-pinned FlashInfer paged executor | external-pool objects installed into the engine page table |
-| One-node data path | NCCL Route-Q and Stage-KV harness with contiguous and paged modes; phase-instrumented Modal L4 prefix sweep | Nsight attribution and topology-comparable bare-metal sweep |
+| Local-tail CUDA | opt-in Rust/C ABI/PyTorch FP16/BF16 tail, exact merge, and fused-tail executor; isolated H20 report | real two-GPU A/B, Nsight attribution, vLLM dispatch, and CUDA Graph coverage |
+| One-node data path | NCCL Route-Q and Stage-KV harness with contiguous and paged modes; sequential/overlap/fused Route-Q strategies; phase-instrumented Modal L4 prefix sweep | overlap/fused two-GPU measurement and topology-comparable bare-metal sweep |
 | Cross-node data path | contracts only | NIXL/UCX/GPUDirect RDMA implementation and measurements |
 
 The installable Python package lives under `python/src/loom_attention`, while
@@ -118,6 +119,14 @@ attention kernel is a PyTorch `einsum` output-plus-LSE reference. The
 and uses `merge_states` for the local-tail merge. Both are checked against the
 same independent full-attention reference.
 
+The engine side now exposes three explicit Route-Q strategies. `sequential`
+preserves the measured baseline. `overlap` launches local-tail attention on a
+side stream after sending Q and waits on that stream only before merge.
+`fused` waits for the remote state and then invokes the optional handwritten
+CUDA tail-plus-merge operator. The report uses the matching critical-path
+residual definition for each strategy. Only `sequential` has a real two-GPU
+performance report so far.
+
 ## M2b Paged-KV Executor
 
 `FlashInferPagedExecutor` consumes a device-resident `PagedKvView` containing a
@@ -161,6 +170,35 @@ Fine-grained local-tail and merge timings remain sensitive to runtime state.
 Mechanism-level attribution still requires a bare-metal Nsight trace. The
 current residual also combines NCCL transfer, queueing, synchronization, and
 framework overhead.
+
+## M2c Handwritten Local-Tail Fusion
+
+The optional CUDA implementation shares one dependency-light C ABI between a
+raw Rust binding package and a PyTorch custom operator. The checked Rust
+executor validates device, owner, generation, address range, byte bounds, shape,
+dtype, and non-aliasing outputs before submitting to a caller-owned CUDA stream.
+The current kernels support FP16/BF16 GQA, `head_dim <= 256`, and
+`tail_tokens <= 64`, with FP32 accumulation.
+
+One baseline kernel computes and materializes the local-tail output/LSE; a
+second merges it with the remote state. The fused kernel instead computes local
+logits and the final output/LSE directly. On one NVIDIA H20 with CUDA 13.1, the
+preallocated CUDA-event microbenchmark measured 1.114x-1.178x median speedup
+across FP16/BF16 and 1/4/16 decode rows at 32 query heads, eight KV heads,
+head-dim 128, and a 16-token tail.
+
+The PyTorch gate compared against full reference attention over a 512-token
+prefix plus the tail. At four rows, maximum output error was `7.63e-6` for FP16
+and `6.10e-5` for BF16; maximum LSE error was `4.77e-7`. Single-GPU emulation
+also validated sequential, side-stream overlap, and fused scheduling semantics.
+The complete report is
+[h20-fused-tail-2026-07-20.json](results/h20-fused-tail-2026-07-20.json).
+
+This is isolated operator evidence, not an end-to-end Route-Q, TPOT, or model
+result. `forge-gas1` exposes one GPU, so it cannot prove real NCCL/local-tail
+overlap or compare the three strategies under two-GPU contention. Production
+vLLM dispatch, CUDA Graph capture, masks, larger tails, and Nsight validation
+remain open.
 
 ## Correctness Gate
 

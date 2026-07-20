@@ -30,6 +30,7 @@ from loom_attention.paged_executor import FlashInferPagedExecutor, PagedKvView
 DTYPE_BYTES = {"float16": 2, "bfloat16": 2}
 PAGED_ATTENTION_BACKEND = "flashinfer-paged"
 BENCHMARK_ATTENTION_BACKENDS = (*ATTENTION_BACKENDS, PAGED_ATTENTION_BACKEND)
+ROUTE_STRATEGIES = ("sequential", "overlap", "fused")
 DTYPE_TOLERANCES = {
     "float16": (2e-3, 2e-3),
     "bfloat16": (2e-2, 2e-2),
@@ -46,6 +47,7 @@ class BenchmarkConfig:
     head_dim: int = 128
     dtype: str = "float16"
     attention_backend: str = "reference"
+    route_strategy: str = "sequential"
     page_size: int = 16
     precondition_dimension: int = 4096
     precondition_iterations: int = 100
@@ -96,6 +98,19 @@ class BenchmarkConfig:
             raise ValueError(
                 f"unsupported attention backend: {self.attention_backend}"
             )
+        if self.route_strategy not in ROUTE_STRATEGIES:
+            raise ValueError(
+                f"unsupported Route-Q strategy: {self.route_strategy}"
+            )
+        if self.route_strategy == "fused":
+            if not 0 < self.tail_tokens <= 64:
+                raise ValueError(
+                    "the fused Route-Q strategy requires 1..=64 tail tokens"
+                )
+            if self.head_dim > 256:
+                raise ValueError(
+                    "the fused Route-Q strategy requires head_dim <= 256"
+                )
         if self.atol is None or self.rtol is None:
             raise ValueError("atol and rtol must be configured")
         if self.atol < 0.0 or self.rtol < 0.0:
@@ -165,6 +180,49 @@ def _residual_samples(
             raise ValueError("phase sample counts must match end-to-end samples")
     return [
         max(0.0, total - sum(component[index] for component in components))
+        for index, total in enumerate(totals)
+    ]
+
+
+def _route_residual_samples(
+    totals: Sequence[float],
+    remote_attention: Sequence[float],
+    local_tail: Sequence[float],
+    tail_merge: Sequence[float],
+    *,
+    strategy: str,
+) -> list[float]:
+    """Estimate the non-kernel Route-Q residual along the critical path."""
+    required = (remote_attention, tail_merge)
+    if any(len(component) != len(totals) for component in required):
+        raise ValueError("phase sample counts must match end-to-end samples")
+    if strategy == "fused":
+        if local_tail:
+            raise ValueError("fused Route-Q must not report a local-tail phase")
+        critical_compute = [
+            remote_attention[index] + tail_merge[index]
+            for index in range(len(totals))
+        ]
+    else:
+        if len(local_tail) != len(totals):
+            raise ValueError("phase sample counts must match end-to-end samples")
+        if strategy == "sequential":
+            critical_compute = [
+                remote_attention[index]
+                + local_tail[index]
+                + tail_merge[index]
+                for index in range(len(totals))
+            ]
+        elif strategy == "overlap":
+            critical_compute = [
+                max(remote_attention[index], local_tail[index])
+                + tail_merge[index]
+                for index in range(len(totals))
+            ]
+        else:
+            raise ValueError(f"unsupported Route-Q strategy: {strategy}")
+    return [
+        max(0.0, total - critical_compute[index])
         for index, total in enumerate(totals)
     ]
 
@@ -309,27 +367,65 @@ def _route_engine(
     config: BenchmarkConfig,
     local_tail_intervals: list[tuple[Any, Any]] | None = None,
     merge_intervals: list[tuple[Any, Any]] | None = None,
+    local_tail_stream: Any | None = None,
 ) -> Any:
     state_backend = _state_backend(config)
+
+    def compute_local_state() -> tuple[Any, Any]:
+        return _record_cuda_interval(
+            torch,
+            lambda: compute_attention_state(
+                torch,
+                query,
+                local_tail[0],
+                local_tail[1],
+                kv_heads=config.kv_heads,
+                scale=config.head_dim**-0.5,
+                backend=state_backend,
+            ),
+            local_tail_intervals,
+        )
+
     dist.send(query, dst=1)
+    local_state = None
+    if config.tail_tokens and config.route_strategy == "overlap":
+        if local_tail_stream is None:
+            raise RuntimeError("overlap Route-Q requires a local-tail stream")
+        local_tail_stream.wait_stream(torch.cuda.current_stream())
+        with torch.cuda.stream(local_tail_stream):
+            for tensor in (query, *local_tail):
+                tensor.record_stream(local_tail_stream)
+            local_state = compute_local_state()
     _batch_receive(dist, remote_buffers, source=1)
+
+    if config.route_strategy == "fused":
+        from loom_attention.cuda_ops import fused_tail_attention_merge
+
+        return _record_cuda_interval(
+            torch,
+            lambda: fused_tail_attention_merge(
+                query,
+                local_tail[0],
+                local_tail[1],
+                remote_buffers[0],
+                remote_buffers[1],
+                scale=config.head_dim**-0.5,
+            ),
+            merge_intervals,
+        )[0]
+
     states = [remote_buffers]
     if config.tail_tokens:
-        states.append(
-            _record_cuda_interval(
-                torch,
-                lambda: compute_attention_state(
-                    torch,
-                    query,
-                    local_tail[0],
-                    local_tail[1],
-                    kv_heads=config.kv_heads,
-                    scale=config.head_dim**-0.5,
-                    backend=state_backend,
-                ),
-                local_tail_intervals,
-            )
-        )
+        if config.route_strategy == "overlap":
+            if local_state is None:
+                raise RuntimeError("overlap Route-Q produced no local state")
+            current_stream = torch.cuda.current_stream()
+            current_stream.wait_stream(local_tail_stream)
+            for tensor in local_state:
+                tensor.record_stream(current_stream)
+            states.append(local_state)
+        else:
+            states.append(compute_local_state())
     return _record_cuda_interval(
         torch,
         lambda: merge_attention_states(torch, states, backend=state_backend),
@@ -525,25 +621,29 @@ def _write_report(
     stage = _latency_summary(stage_samples)
     route["payload_bytes"] = projected_transfer_bytes(config)["route_query_total"]
     stage["payload_bytes"] = projected_transfer_bytes(config)["stage_kv_total"]
-    local_tail_for_residual = route_local_tail_samples or [
-        0.0 for _ in route_samples
-    ]
-    route_residual = _residual_samples(
+    local_tail_for_residual = (
+        []
+        if config.route_strategy == "fused"
+        else route_local_tail_samples or [0.0 for _ in route_samples]
+    )
+    route_residual = _route_residual_samples(
         route_samples,
         route_remote_attention_samples,
         local_tail_for_residual,
         route_merge_samples,
+        strategy=config.route_strategy,
     )
     stage_residual = _residual_samples(
         stage_samples, stage_attention_samples
     )
     report = {
-        "schema_version": 2,
+        "schema_version": 3,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "passed": passed,
         "implementation": {
             "transport": "torch.distributed NCCL point-to-point",
             "attention_backend": config.attention_backend,
+            "route_strategy": config.route_strategy,
             "attention_kernel": (
                 "FlashInfer BatchDecodeWithPagedKVCacheWrapper"
                 if paged
@@ -552,13 +652,19 @@ def _write_report(
                 else "PyTorch CUDA einsum output-plus-LSE reference"
             ),
             "merge_kernel": (
-                "FlashInfer merge_states"
-                if config.attention_backend in ("flashinfer", PAGED_ATTENTION_BACKEND)
+                "Loom handwritten CUDA fused local-tail attention plus exact "
+                "output/LSE merge"
+                if config.route_strategy == "fused"
+                else "FlashInfer merge_states"
+                if config.attention_backend
+                in ("flashinfer", PAGED_ATTENTION_BACKEND)
                 else "PyTorch output-plus-LSE merge"
             ),
             "kv_layout": "paged NHD" if paged else "contiguous NHD",
             "paged_executor": paged,
-            "production_kernel": paged,
+            "production_kernel": paged and config.route_strategy != "fused",
+            "remote_attention_production_kernel": paged,
+            "experimental_fused_tail_kernel": config.route_strategy == "fused",
             "fixture_repacked_before_timing": paged,
         },
         "environment": _environment(torch),
@@ -578,9 +684,12 @@ def _write_report(
                 ),
                 "kernel_clock": "CUDA events on each rank's current stream",
                 "residual_definition": (
-                    "end-to-end minus measured CUDA kernels; includes NCCL "
-                    "transport, queueing, synchronization, and host/framework "
-                    "overhead, so it is not a pure link-bandwidth measurement"
+                    "end-to-end minus the estimated critical-path CUDA "
+                    "compute; overlap uses max(remote attention, local tail), "
+                    "while sequential and fused use their ordered kernel "
+                    "phases. The residual includes NCCL transport, queueing, "
+                    "synchronization, and host/framework overhead, so it is "
+                    "not a pure link-bandwidth measurement"
                 ),
                 "profiling_metadata_exchange": (
                     "rank-1 event durations sent after the timed Route-Q loop"
@@ -597,7 +706,16 @@ def _write_report(
                 "local_tail_kernel_ms": _optional_latency_summary(
                     route_local_tail_samples
                 ),
-                "merge_kernel_ms": _latency_summary(route_merge_samples),
+                "merge_kernel_ms": (
+                    None
+                    if config.route_strategy == "fused"
+                    else _latency_summary(route_merge_samples)
+                ),
+                "fused_tail_merge_kernel_ms": (
+                    _latency_summary(route_merge_samples)
+                    if config.route_strategy == "fused"
+                    else None
+                ),
                 "communication_queue_framework_residual_ms": _latency_summary(
                     route_residual
                 ),
@@ -644,8 +762,11 @@ def _run_rank(
         local_tail = (tail_key, tail_value)
         paged_route = None
         paged_stage = None
+        route_local_tail_stream = None
 
         if rank == 0:
+            if config.route_strategy == "overlap" and config.tail_tokens:
+                route_local_tail_stream = torch.cuda.Stream(device=device)
             remote_buffers = (
                 torch.empty(
                     (config.rows, config.query_heads, config.head_dim),
@@ -709,7 +830,13 @@ def _run_rank(
         dist.barrier()
         if rank == 0:
             route_output = _route_engine(
-                torch, dist, query, remote_buffers, local_tail, config
+                torch,
+                dist,
+                query,
+                remote_buffers,
+                local_tail,
+                config,
+                local_tail_stream=route_local_tail_stream,
             )
             expected = _full_attention(torch, query, prefix, local_tail, config)
         else:
@@ -737,6 +864,7 @@ def _run_rank(
                             else None
                         ),
                         route_merge_intervals if measured else None,
+                        route_local_tail_stream,
                     ),
                 )
                 if measured:

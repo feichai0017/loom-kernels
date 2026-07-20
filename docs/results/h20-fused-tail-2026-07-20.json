@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "created_at": "2026-07-20T11:47:31+08:00",
+  "scope": "isolated local-tail attention plus exact output/LSE merge",
+  "environment": {
+    "host_alias": "forge-gas1",
+    "gpu": "NVIDIA H20",
+    "gpu_count": 1,
+    "compute_capability": "9.0",
+    "driver": "535.161.08",
+    "cuda_toolkit": "13.1.115",
+    "rustc": "1.97.1",
+    "cargo": "1.97.1",
+    "python": "3.11.10",
+    "torch": "2.10.0a0+git89fc82e.aml",
+    "torch_cuda": "13.1"
+  },
+  "kernel_benchmark": {
+    "measurement": "CUDA events around preallocated kernels on one non-blocking stream",
+    "common_shape": {
+      "query_heads": 32,
+      "kv_heads": 8,
+      "head_dim": 128,
+      "tail_tokens": 16,
+      "warmup": 100,
+      "iterations_per_sample": 1000,
+      "samples": 20
+    },
+    "baseline": "materialize local output/LSE, then launch exact two-state merge",
+    "candidate": "one handwritten CUDA kernel without materialized local state",
+    "cases": [
+      {
+        "rows": 1,
+        "dtype": "fp16",
+        "baseline_two_kernel_us": {
+          "minimum": 11.268095970153809,
+          "median": 11.270784378051758,
+          "maximum": 11.272416114807129
+        },
+        "fused_one_kernel_us": {
+          "minimum": 10.038975715637207,
+          "median": 10.040543556213379,
+          "maximum": 10.04319953918457
+        },
+        "median_speedup": 1.122527312884079,
+        "fused_output_max_absolute_error": 0.0002438426,
+        "fused_lse_max_absolute_error": 4.7683716e-7
+      },
+      {
+        "rows": 1,
+        "dtype": "bf16",
+        "baseline_two_kernel_us": {
+          "minimum": 11.067808151245117,
+          "median": 11.069408416748047,
+          "maximum": 11.075167655944824
+        },
+        "fused_one_kernel_us": {
+          "minimum": 9.931743621826172,
+          "median": 9.934880256652832,
+          "maximum": 9.937248229980469
+        },
+        "median_speedup": 1.1141964604289503,
+        "fused_output_max_absolute_error": 0.0019519329,
+        "fused_lse_max_absolute_error": 4.7683716e-7
+      },
+      {
+        "rows": 4,
+        "dtype": "fp16",
+        "baseline_two_kernel_us": {
+          "minimum": 11.366975784301758,
+          "median": 11.369343757629395,
+          "maximum": 11.371456146240234
+        },
+        "fused_one_kernel_us": {
+          "minimum": 10.05072021484375,
+          "median": 10.053600311279297,
+          "maximum": 10.056096076965332
+        },
+        "median_speedup": 1.130872862020777,
+        "fused_output_max_absolute_error": 0.00024402142,
+        "fused_lse_max_absolute_error": 4.7683716e-7
+      },
+      {
+        "rows": 4,
+        "dtype": "bf16",
+        "baseline_two_kernel_us": {
+          "minimum": 11.626912117004395,
+          "median": 11.629440307617188,
+          "maximum": 11.640671730041504
+        },
+        "fused_one_kernel_us": {
+          "minimum": 10.23078441619873,
+          "median": 10.233887672424316,
+          "maximum": 10.244704246520996
+        },
+        "median_speedup": 1.1363658347504881,
+        "fused_output_max_absolute_error": 0.0019519329,
+        "fused_lse_max_absolute_error": 4.7683716e-7
+      },
+      {
+        "rows": 16,
+        "dtype": "fp16",
+        "baseline_two_kernel_us": {
+          "minimum": 13.740768432617188,
+          "median": 13.744128227233887,
+          "maximum": 13.747584342956543
+        },
+        "fused_one_kernel_us": {
+          "minimum": 11.664928436279297,
+          "median": 11.669695854187012,
+          "maximum": 11.673151969909668
+        },
+        "median_speedup": 1.1777623340802479,
+        "fused_output_max_absolute_error": 0.00024402142,
+        "fused_lse_max_absolute_error": 4.7683716e-7
+      },
+      {
+        "rows": 16,
+        "dtype": "bf16",
+        "baseline_two_kernel_us": {
+          "minimum": 13.747551918029785,
+          "median": 13.752384185791016,
+          "maximum": 13.766783714294434
+        },
+        "fused_one_kernel_us": {
+          "minimum": 11.920479774475098,
+          "median": 11.925824165344238,
+          "maximum": 11.93068790435791
+        },
+        "median_speedup": 1.1531600663503538,
+        "fused_output_max_absolute_error": 0.0019530654,
+        "fused_lse_max_absolute_error": 4.7683716e-7
+      }
+    ]
+  },
+  "pytorch_correctness_gate": {
+    "passed": true,
+    "workload": {
+      "rows": 4,
+      "prefix_tokens": 512,
+      "tail_tokens": 16,
+      "query_heads": 32,
+      "kv_heads": 8,
+      "head_dim": 128,
+      "seed": 7
+    },
+    "cases": [
+      {
+        "dtype": "fp16",
+        "output_max_absolute_error": 7.62939453125e-6,
+        "lse_max_absolute_error": 4.76837158203125e-7,
+        "sequential_passed": true,
+        "overlap_stream_semantics_passed": true,
+        "fused_passed": true
+      },
+      {
+        "dtype": "bf16",
+        "output_max_absolute_error": 6.103515625e-5,
+        "lse_max_absolute_error": 4.76837158203125e-7,
+        "sequential_passed": true,
+        "overlap_stream_semantics_passed": true,
+        "fused_passed": true
+      }
+    ]
+  },
+  "claim_boundary": [
+    "The latency comparison is an isolated preallocated-kernel microbenchmark, not end-to-end Route-Q or model latency.",
+    "The H20 host exposes one GPU, so the overlap strategy was checked for stream ordering and numerical correctness with prepopulated remote state, not for real NCCL overlap speedup.",
+    "The fused kernel currently supports FP16/BF16, head_dim <= 256, tail_tokens <= 64, and GQA where kv_heads divides query_heads.",
+    "All measured rows share one contiguous tail K/V segment; this is not a batch of distinct per-sequence page tables.",
+    "No CUDA Graph, production vLLM dispatch, external KV pool, or multi-node transport result is claimed."
+  ]
+}

@@ -86,6 +86,7 @@ python3 -m integration.two_gpu_smoke run \
   --page-size 16 \
   --dtype float16 \
   --attention-backend flashinfer-paged \
+  --route-strategy sequential \
   --warmup 10 \
   --iterations 100 \
   --report build/two-gpu-smoke/report-4k.json
@@ -98,6 +99,21 @@ By default, both ranks execute a fixed 100-by-4096 FP16 GEMM preconditioner
 before each timed path. This work is excluded from latency samples and controls
 for accelerator clock state. Set `--precondition-iterations 0` to disable it,
 and record that choice when comparing reports.
+
+### Engine-Side Strategy
+
+`--route-strategy` selects one of three engine-side schedules:
+
+| Value | Behavior | Evidence |
+| --- | --- | --- |
+| `sequential` | receive remote state, compute local tail, merge | two-GPU Modal sweep |
+| `overlap` | run local tail on a side stream while waiting for remote state, then merge | H20 stream/correctness gate; two-GPU latency open |
+| `fused` | receive remote state, then run one handwritten CUDA tail-plus-merge kernel | H20 kernel/correctness gate; two-GPU latency open |
+
+`fused` requires the optional PyTorch extension. Build it and review its shape
+limits in the [Rust/CUDA fused-tail guide](rust-cuda-fused-tail.md). Keep the
+backend, workload, warmup, and iteration count identical when comparing the
+three strategies.
 
 ## Run On Modal
 
@@ -176,6 +192,7 @@ A reviewable report must contain:
 - p50/p99 latency and payload bytes for both paths;
 - CUDA-event kernel timings and the explicitly labelled non-kernel residual;
 - explicit kernel, KV layout, paged-executor, and fixture-repack metadata.
+- the selected Route-Q strategy and its matching phase fields.
 
 The macOS development host cannot produce this report locally. The first Linux
 report was produced through the Modal launcher on two L4 GPUs; broader topology
@@ -201,11 +218,14 @@ synchronization. Remote attention, local-tail attention, merge, and Stage-KV
 attention use CUDA events on their owning rank. Rank 1 sends its event durations
 to rank 0 only after the measured Route-Q loop.
 
-The report derives `communication_queue_framework_residual_ms` per sample by
-subtracting measured kernel durations from end-to-end latency. The residual
-includes NCCL transport, queueing, stream synchronization, Python/PyTorch
-overhead, and measurement overhead. It is deliberately not named transfer time
-and must not be used as a pure link-bandwidth result.
+The report derives `communication_queue_framework_residual_ms` per sample from
+the estimated critical path. Sequential subtracts remote attention, local-tail
+attention, and merge in order. Overlap subtracts the larger of remote attention
+and local-tail attention, then merge. Fused subtracts remote attention and the
+combined tail-plus-merge kernel. The residual includes NCCL transport, queueing,
+stream synchronization, Python/PyTorch overhead, and measurement overhead. It
+is deliberately not named transfer time and must not be used as a pure
+link-bandwidth result.
 
 ## Modal L4 Prefix Sweep
 

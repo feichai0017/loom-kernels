@@ -12,6 +12,7 @@ from typing import Sequence
 from .two_gpu_benchmark import (
     BENCHMARK_ATTENTION_BACKENDS,
     DTYPE_BYTES,
+    ROUTE_STRATEGIES,
     BenchmarkConfig,
     projected_transfer_bytes,
     run_benchmark,
@@ -34,6 +35,12 @@ def _add_workload_arguments(parser: argparse.ArgumentParser) -> None:
         choices=BENCHMARK_ATTENTION_BACKENDS,
         default="reference",
     )
+    parser.add_argument(
+        "--route-strategy",
+        choices=ROUTE_STRATEGIES,
+        default="sequential",
+        help="sequential, stream-overlapped, or handwritten fused tail/merge",
+    )
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--iterations", type=int, default=20)
     parser.add_argument("--seed", type=int, default=7)
@@ -55,6 +62,7 @@ def _config_from_args(args: argparse.Namespace) -> BenchmarkConfig:
         precondition_iterations=args.precondition_iterations,
         dtype=args.dtype,
         attention_backend=args.attention_backend,
+        route_strategy=args.route_strategy,
         warmup=args.warmup,
         iterations=args.iterations,
         seed=args.seed,

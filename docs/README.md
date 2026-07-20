@@ -14,6 +14,7 @@
 
 - [vLLM local attention backend](guides/vllm-local-backend.md)
 - [Two-GPU Route-Q acceptance gate](guides/two-gpu-route-q.md)
+- [Rust/CUDA fused local-tail operator](guides/rust-cuda-fused-tail.md)
 
 ## Research Notes
 

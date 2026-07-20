@@ -1,5 +1,9 @@
 [workspace]
-members = ["crates/loom-attention"]
+members = [
+    "crates/loom-attention",
+    "crates/loom-cuda",
+    "crates/loom-cuda-sys",
+]
 default-members = ["crates/loom-attention"]
 resolver = "2"
 
@@ -20,3 +24,5 @@ thiserror = "2.0.12"
 tokio = { version = "1.42", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+cc = "1.2"
+half = "2.7"

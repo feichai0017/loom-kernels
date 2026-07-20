@@ -82,6 +82,21 @@ on Modal L4; external page-table binding and Nsight attribution remain open.
 Exit: the paged executor passes the same two-GPU correctness gate and produces
 a hardware-qualified report.
 
+### M2c: Local-Tail Scheduling And Fusion
+
+Status: handwritten Rust/CUDA/PyTorch operator and single-H20 correctness plus
+isolated microbenchmark complete; real two-GPU A/B and production dispatch open.
+
+- overlap local active-tail attention with the remote Route-Q round trip on a
+  separate engine CUDA stream;
+- fuse bounded local-tail attention with the exact remote-state merge;
+- preserve sequential, overlap, and fused modes for matched comparisons;
+- integrate the selected path with the real engine attention dispatch.
+
+Exit: all three strategies pass the two-GPU full-attention oracle, have
+Nsight-attributed latency reports on the same topology, and select a default
+from measured end-to-end benefit rather than isolated kernel speedup.
+
 ### M3: External Pool
 
 Status: interface only; production adapter not implemented.

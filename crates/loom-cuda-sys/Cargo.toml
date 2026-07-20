@@ -1,0 +1,15 @@
+[package]
+name = "loom-cuda-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Raw CUDA kernel bindings for Loom attention"
+links = "loom_cuda_kernels"
+
+[features]
+default = []
+cuda = []
+
+[build-dependencies]
+cc.workspace = true
