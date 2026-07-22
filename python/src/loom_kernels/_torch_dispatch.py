@@ -8,6 +8,7 @@ from ._native import (
     launch_add_rms_norm,
     launch_greedy_sample_logprobs,
     launch_min_p_filter,
+    launch_paged_decode_attention,
     launch_rms_norm_dynamic_fp8,
     launch_rope_paged_kv_write,
     launch_selected_token_logprobs,
@@ -19,6 +20,7 @@ from .ops.activation import (
     _validate_silu_and_mul_buffers,
     _validate_silu_and_mul_dynamic_fp8_buffers,
 )
+from .ops.attention import _validate_paged_decode_attention
 from .ops.logits import _validate_min_p_filter
 from .ops.norm import _validate_add_rms_norm, _validate_dynamic_fp8_buffers
 from .ops.rope_kv import _validate_rope_paged_kv_write
@@ -319,6 +321,49 @@ if _EXTENSION_PATH is None:
                 stream.cuda_stream,
             )
 
+    @torch.library.custom_op(
+        "loom_kernels::paged_decode_attention",
+        mutates_args={"output"},
+        device_types="cuda",
+    )
+    def _paged_decode_attention(
+        query: torch.Tensor,
+        key_cache: torch.Tensor,
+        value_cache: torch.Tensor,
+        block_tables: torch.Tensor,
+        sequence_lengths: torch.Tensor,
+        output: torch.Tensor,
+        max_sequence_length: int,
+        scale: float,
+    ) -> None:
+        dtype, dimensions = _validate_paged_decode_attention(
+            query,
+            key_cache,
+            value_cache,
+            block_tables,
+            sequence_lengths,
+            output,
+            max_sequence_length,
+            scale,
+        )
+        device_index = query.device.index
+        if device_index is None:
+            device_index = torch.cuda.current_device()
+        with torch.cuda.device(device_index):
+            stream = torch.cuda.current_stream(device_index)
+            launch_paged_decode_attention(
+                dtype,
+                query.data_ptr(),
+                key_cache.data_ptr(),
+                value_cache.data_ptr(),
+                block_tables.data_ptr(),
+                sequence_lengths.data_ptr(),
+                output.data_ptr(),
+                *dimensions,
+                scale,
+                stream.cuda_stream,
+            )
+
     _ADAPTER_BACKEND = "python-ctypes"
     _add_rms_norm_mut_unchecked = _add_rms_norm_mut
     _rms_norm_dynamic_fp8_unchecked = _rms_norm_dynamic_fp8
@@ -327,6 +372,7 @@ if _EXTENSION_PATH is None:
     _greedy_sample_logprobs_unchecked = _greedy_sample_logprobs
     _selected_token_logprobs_unchecked = _selected_token_logprobs
     _min_p_filter_unchecked = _min_p_filter
+    _paged_decode_attention_unchecked = _paged_decode_attention
     _rope_paged_kv_write_unchecked = _rope_paged_kv_write
 else:
     _add_rms_norm_mut = torch.ops.loom_kernels.add_rms_norm_mut.default
@@ -356,6 +402,12 @@ else:
     _min_p_filter = torch.ops.loom_kernels.min_p_filter_.default
     _min_p_filter_unchecked = (
         torch.ops.loom_kernels.min_p_filter_unchecked_.default
+    )
+    _paged_decode_attention = (
+        torch.ops.loom_kernels.paged_decode_attention.default
+    )
+    _paged_decode_attention_unchecked = (
+        torch.ops.loom_kernels.paged_decode_attention_unchecked.default
     )
     _rope_paged_kv_write = torch.ops.loom_kernels.rope_paged_kv_write_.default
     _rope_paged_kv_write_unchecked = (

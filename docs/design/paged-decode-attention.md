@@ -48,6 +48,21 @@ Those options become separate contract fields only after the base kernel and a
 named engine path are correct. They will not be hidden behind silent fallback
 inside the Rust operator.
 
+## Implemented Short-Context Kernel
+
+The first handwritten CUDA implementation assigns one 256-thread block to
+each `(sequence, query_head)` pair. Eight warps compute Q/K dot products over
+the paged cache, a block reduction performs stable max-subtracted softmax in
+F32, and threads accumulate independent value dimensions. The dynamic score
+buffer deliberately caps this path at 1,024 tokens.
+
+The C ABI and PyTorch boundary accept contiguous int32 block tables and
+sequence lengths, matching vLLM's live metadata. Their active values are
+trusted engine metadata: the host-supplied maximum length and active block IDs
+must be valid. The safe Rust entrypoints preserve the same shapes and dtypes
+with checked device-buffer sizes. No implicit device-to-host validation or
+fallback is introduced on the launch path.
+
 ## Qualification Sequence
 
 1. Rust contract and CPU oracle, including invalid metadata and GQA mapping;
@@ -58,5 +73,16 @@ inside the Rust operator.
 6. H20 comparison against the engine-selected FA3/FlashInfer implementation;
 7. real-model TPOT, throughput, and KV-memory evidence.
 
-Only step 1 is complete today. The CUDA backend correctly reports this
-operator as unsupported until the accelerator and engine gates exist.
+Steps 1-4 and the operator-level part of step 6 are complete. Randomized
+PyTorch tests cover MQA/GQA, partial final blocks, shuffled physical blocks,
+distinct value widths, F32/FP16/BF16, external streams, FakeTensor/schema,
+`torch.compile`, and launch telemetry. On NVIDIA H20 all 16 focused tests and
+the 144-test Python suite pass.
+
+The named BF16 FA3 matrix establishes a narrow performance envelope rather
+than a blanket replacement. At context 16, CUDA Graph speedups are `1.43x`,
+`1.44x`, and `2.04x` for batches 1, 8, and 32. At context 32 only batch 32
+remains ahead (`1.11x`); at 64-512 tokens the first kernel is slower than FA3.
+Therefore step 5 remains open and vLLM automatic routing is intentionally not
+enabled. The next CUDA work is a tiled/split-K design for the 32-128-token
+region, followed by an explicit measured-shape fallback and real-model gate.

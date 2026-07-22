@@ -85,7 +85,7 @@ valuable epilogues, and evidence around it.
 
 | Operator | Priority | State | Intended fusion boundary |
 | --- | --- | --- | --- |
-| paged MQA/GQA decode attention | P1 | next | Rust contract and CPU oracle exist; CUDA and engine gates remain |
+| paged MQA/GQA decode attention | P1 | supported | short-context Rust/CUDA/PyTorch path; only context-16 H20 shapes currently beat FA3 consistently, so engine routing remains disabled |
 | ragged prefill attention | P1 | vendor-backed | FlashAttention/FlashInfer selected by evidence |
 | split-KV state and numerically stable LSE merge | P1 | planned | long-context and distributed attention |
 | sliding-window, ALiBi, soft-cap, and causal variants | P1 | planned | standard attention contract options |
@@ -119,7 +119,8 @@ the boundary or an isolated implementation is measurably useful.
 2. Optimize the real-engine RoPE+paged-KV boundary only where profiling shows
    TPOT materiality; keep its current parity result explicit.
 3. Add MoE routing/movement before attempting a full grouped-GEMM stack.
-4. Add paged decode attention against engine-owned cache contracts.
+4. Optimize the implemented paged decode path for 32-128 tokens, then admit a
+   measured-shape engine route with explicit FA3 fallback.
 5. Add INT8 fused boundaries only for a named engine/model consumer.
 6. Attempt communication-aware fusion only after single-GPU operators and
    real tensor-parallel workloads are reproducible.

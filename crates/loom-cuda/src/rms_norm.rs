@@ -366,9 +366,28 @@ impl Backend for CudaBackend {
             OperatorSpec::MinPFilter(_) => {
                 Support::Unsupported("CUDA min-p filtering supports F32, FP16, and BF16 logits")
             }
-            OperatorSpec::PagedDecodeAttention(_) => Support::Unsupported(
-                "CUDA paged decode attention is not implemented yet; only the Rust contract and CPU oracle are available",
-            ),
+            OperatorSpec::PagedDecodeAttention(spec)
+                if crate::paged_decode::supports_spec(*spec) =>
+            {
+                Support::Supported
+            }
+            OperatorSpec::PagedDecodeAttention(spec)
+                if !matches!(spec.dtype(), DType::F32 | DType::F16 | DType::Bf16) =>
+            {
+                Support::Unsupported(
+                    "CUDA paged decode attention supports F32, FP16, and BF16 native caches",
+                )
+            }
+            OperatorSpec::PagedDecodeAttention(spec)
+                if spec.max_sequence_length() > crate::paged_decode::PAGED_DECODE_MAX_CONTEXT =>
+            {
+                Support::Unsupported(
+                    "the first CUDA paged decode kernel supports at most 1024 context tokens",
+                )
+            }
+            OperatorSpec::PagedDecodeAttention(_) => {
+                Support::Unsupported("paged decode attention shape exceeds the CUDA ABI")
+            }
             OperatorSpec::RotaryEmbedding(_) => Support::Unsupported(
                 "standalone CUDA RoPE is not exposed yet; use the fused RoPE+paged-KV contract",
             ),

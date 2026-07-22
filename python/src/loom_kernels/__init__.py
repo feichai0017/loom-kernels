@@ -56,6 +56,20 @@ def min_p_filter_(*args: Any, **kwargs: Any) -> Any:
     return implementation(*args, **kwargs)
 
 
+def paged_decode_attention(*args: Any, **kwargs: Any) -> Any:
+    """Lazily execute base paged MQA/GQA decode attention."""
+    from .torch_ops import paged_decode_attention as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def paged_decode_attention_out(*args: Any, **kwargs: Any) -> Any:
+    """Lazily execute paged decode attention into caller-owned output."""
+    from .torch_ops import paged_decode_attention_out as implementation
+
+    return implementation(*args, **kwargs)
+
+
 def silu_and_mul(*args: Any, **kwargs: Any) -> Any:
     """Lazily execute fused split-half SiLU-and-Mul."""
     from .torch_ops import silu_and_mul as implementation
@@ -89,6 +103,8 @@ __all__ = [
     "add_rms_norm_",
     "greedy_sample_logprobs",
     "min_p_filter_",
+    "paged_decode_attention",
+    "paged_decode_attention_out",
     "rms_norm_dynamic_fp8",
     "rms_norm_dynamic_fp8_out",
     "rope_paged_kv_write_",

@@ -19,6 +19,13 @@ externally managed deployment can set `LOOM_KERNELS_CUDA_LIBRARY` and
 `LOOM_KERNELS_TORCH_LIBRARY` to their absolute paths. Automated binary wheels
 are not published yet.
 
+The base paged-decode API is available as
+`loom_kernels.paged_decode_attention` and `paged_decode_attention_out`. It
+accepts one contiguous `[B, Hq, D]` query, native NHD paged K/V caches, and
+contiguous int32 block tables/sequence lengths. The first CUDA kernel supports
+F32/FP16/BF16 through 1,024 tokens. H20 evidence favors it only for extremely
+short contexts, so it is not registered as an automatic vLLM replacement.
+
 The vLLM 0.24 Min-P processor replacement is opt-in with
 `LOOM_KERNELS_ENABLE_MIN_P=1`. Its H20-qualified fast path requires at least 32
 rows and a 65,536-token vocabulary; smaller shapes use vLLM's original path.

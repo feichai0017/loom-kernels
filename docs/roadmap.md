@@ -95,8 +95,13 @@ Status: in progress.
 
 - ~~paged MQA/GQA base contract and CPU oracle~~ — one query per request,
   native paged KV, MQA/GQA mapping, and block-table validation are fixed;
-- handwritten short-context and split-K/LSE CUDA candidates;
-- current-stream PyTorch and vLLM 0.24 engine adapters;
+- ~~first handwritten short-context CUDA candidate~~ — F32/FP16/BF16 C ABI,
+  safe Rust, current-stream PyTorch, randomized oracle, compile/graph gates,
+  and an H20 FA3 comparison are complete; it wins consistently only at
+  context 16 and remains correctness-only through context 1024;
+- tiled or split-K/LSE optimization for the measured 32-128-token gap;
+- measured-shape vLLM 0.24 adapter with explicit FA3 fallback, followed by a
+  real-model engine gate;
 - vendor attention integration where it wins;
 - split-KV/LSE merge, sliding-window variants, and MLA when a consumer exists.
 

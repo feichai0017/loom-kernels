@@ -20,6 +20,7 @@ std::atomic<int64_t> rope_paged_kv_write_launches{0};
 std::atomic<int64_t> greedy_sample_logprobs_launches{0};
 std::atomic<int64_t> selected_token_logprobs_launches{0};
 std::atomic<int64_t> min_p_filter_launches{0};
+std::atomic<int64_t> paged_decode_attention_launches{0};
 
 bool byte_ranges_overlap(const at::Tensor& left, const at::Tensor& right) {
   const auto left_begin = reinterpret_cast<uintptr_t>(left.data_ptr());
@@ -833,6 +834,171 @@ void rope_paged_kv_write(
                              key_cache, value_cache, slot_mapping, is_neox);
 }
 
+void check_paged_decode_attention_contract(
+    const at::Tensor& query, const at::Tensor& key_cache,
+    const at::Tensor& value_cache, const at::Tensor& block_tables,
+    const at::Tensor& sequence_lengths, const at::Tensor& output,
+    int64_t max_sequence_length, double scale) {
+  TORCH_CHECK(query.is_cuda(), "Loom paged decode query must be CUDA");
+  TORCH_CHECK(key_cache.device() == query.device() &&
+                  value_cache.device() == query.device() &&
+                  block_tables.device() == query.device() &&
+                  sequence_lengths.device() == query.device() &&
+                  output.device() == query.device(),
+              "Loom paged decode tensors must be on one CUDA device");
+  TORCH_CHECK(query.scalar_type() == at::kFloat ||
+                  query.scalar_type() == at::kHalf ||
+                  query.scalar_type() == at::kBFloat16,
+              "Loom paged decode supports F32, FP16, and BF16 native caches");
+  TORCH_CHECK(key_cache.scalar_type() == query.scalar_type() &&
+                  value_cache.scalar_type() == query.scalar_type() &&
+                  output.scalar_type() == query.scalar_type(),
+              "Loom paged decode data tensors must share a dtype");
+  TORCH_CHECK(block_tables.scalar_type() == at::kInt &&
+                  sequence_lengths.scalar_type() == at::kInt,
+              "Loom paged decode metadata must use int32");
+  TORCH_CHECK(query.dim() == 3 && key_cache.dim() == 4 &&
+                  value_cache.dim() == 4 && block_tables.dim() == 2 &&
+                  sequence_lengths.dim() == 1 && output.dim() == 3,
+              "Loom paged decode requires rank-3 query/output, rank-4 K/V "
+              "caches, rank-2 block tables, and rank-1 sequence lengths");
+  TORCH_CHECK(query.size(0) > 0 && query.size(1) > 0 && query.size(2) > 0 &&
+                  key_cache.size(0) > 0 && key_cache.size(1) > 0 &&
+                  key_cache.size(2) > 0 && value_cache.size(3) > 0,
+              "Loom paged decode dimensions must be positive");
+  TORCH_CHECK(key_cache.size(3) == query.size(2),
+              "Loom paged decode Q/K head sizes must match");
+  TORCH_CHECK(value_cache.size(0) == key_cache.size(0) &&
+                  value_cache.size(1) == key_cache.size(1) &&
+                  value_cache.size(2) == key_cache.size(2),
+              "Loom paged decode K/V cache prefixes must match");
+  TORCH_CHECK(query.size(1) % key_cache.size(2) == 0,
+              "Loom paged decode query heads must be divisible by KV heads");
+  TORCH_CHECK(block_tables.size(0) == query.size(0) &&
+                  block_tables.size(1) > 0 &&
+                  sequence_lengths.size(0) == query.size(0),
+              "Loom paged decode metadata batch dimensions must match query");
+  TORCH_CHECK(output.size(0) == query.size(0) &&
+                  output.size(1) == query.size(1) &&
+                  output.size(2) == value_cache.size(3),
+              "Loom paged decode output must have shape [B, Hq, Dv]");
+  TORCH_CHECK(query.is_contiguous() && key_cache.is_contiguous() &&
+                  value_cache.is_contiguous() && block_tables.is_contiguous() &&
+                  sequence_lengths.is_contiguous() && output.is_contiguous(),
+              "Loom paged decode tensors must be contiguous");
+  TORCH_CHECK(max_sequence_length > 0 && max_sequence_length <= 1024 &&
+                  max_sequence_length <=
+                      block_tables.size(1) * key_cache.size(1),
+              "Loom paged decode max_sequence_length must be within table "
+              "capacity and the first-kernel limit 1024");
+  TORCH_CHECK(std::isfinite(scale) && scale > 0.0,
+              "Loom paged decode scale must be finite and positive");
+  TORCH_CHECK(!query.requires_grad() && !key_cache.requires_grad() &&
+                  !value_cache.requires_grad(),
+              "Loom paged decode is an inference-only operator");
+  TORCH_CHECK(!byte_ranges_overlap(output, query) &&
+                  !byte_ranges_overlap(output, key_cache) &&
+                  !byte_ranges_overlap(output, value_cache) &&
+                  !byte_ranges_overlap(output, block_tables) &&
+                  !byte_ranges_overlap(output, sequence_lengths),
+              "Loom paged decode output storage must not overlap inputs");
+
+  const int64_t limits[] = {
+      query.size(0),       query.size(1),      key_cache.size(2),
+      query.size(2),       value_cache.size(3), key_cache.size(0),
+      key_cache.size(1),   block_tables.size(1), max_sequence_length,
+  };
+  for (const int64_t value_to_check : limits) {
+    TORCH_CHECK(value_to_check > 0 &&
+                    value_to_check <= std::numeric_limits<uint32_t>::max(),
+                "Loom paged decode shape exceeds the CUDA ABI");
+  }
+  TORCH_CHECK(query.size(0) <=
+                  std::numeric_limits<int32_t>::max() / query.size(1),
+              "Loom paged decode grid exceeds the CUDA ABI");
+}
+
+void launch_paged_decode_attention(
+    const at::Tensor& query, const at::Tensor& key_cache,
+    const at::Tensor& value_cache, const at::Tensor& block_tables,
+    const at::Tensor& sequence_lengths, at::Tensor output,
+    int64_t max_sequence_length, double scale) {
+  const auto sequences = static_cast<uint32_t>(query.size(0));
+  const auto query_heads = static_cast<uint32_t>(query.size(1));
+  const auto kv_heads = static_cast<uint32_t>(key_cache.size(2));
+  const auto head_size = static_cast<uint32_t>(query.size(2));
+  const auto value_head_size = static_cast<uint32_t>(value_cache.size(3));
+  const auto num_blocks = static_cast<uint32_t>(key_cache.size(0));
+  const auto block_size = static_cast<uint32_t>(key_cache.size(1));
+  const auto max_blocks_per_sequence =
+      static_cast<uint32_t>(block_tables.size(1));
+  const auto max_context = static_cast<uint32_t>(max_sequence_length);
+  const auto scale_f32 = static_cast<float>(scale);
+  const c10::cuda::CUDAGuard device_guard(query.device());
+  const auto stream = at::cuda::getCurrentCUDAStream(query.device().index());
+
+  int status = LOOM_CUDA_UNSUPPORTED;
+  if (query.scalar_type() == at::kFloat) {
+    status = loom_cuda_paged_decode_attention_f32(
+        query.data_ptr<float>(), key_cache.data_ptr<float>(),
+        value_cache.data_ptr<float>(), block_tables.data_ptr<int32_t>(),
+        sequence_lengths.data_ptr<int32_t>(), output.data_ptr<float>(),
+        sequences, query_heads, kv_heads, head_size, value_head_size,
+        num_blocks, block_size, max_blocks_per_sequence, max_context,
+        scale_f32, stream.stream());
+  } else if (query.scalar_type() == at::kHalf) {
+    status = loom_cuda_paged_decode_attention_f16(
+        reinterpret_cast<const uint16_t*>(query.data_ptr<at::Half>()),
+        reinterpret_cast<const uint16_t*>(key_cache.data_ptr<at::Half>()),
+        reinterpret_cast<const uint16_t*>(value_cache.data_ptr<at::Half>()),
+        block_tables.data_ptr<int32_t>(),
+        sequence_lengths.data_ptr<int32_t>(),
+        reinterpret_cast<uint16_t*>(output.data_ptr<at::Half>()), sequences,
+        query_heads, kv_heads, head_size, value_head_size, num_blocks,
+        block_size, max_blocks_per_sequence, max_context, scale_f32,
+        stream.stream());
+  } else if (query.scalar_type() == at::kBFloat16) {
+    status = loom_cuda_paged_decode_attention_bf16(
+        reinterpret_cast<const uint16_t*>(query.data_ptr<at::BFloat16>()),
+        reinterpret_cast<const uint16_t*>(
+            key_cache.data_ptr<at::BFloat16>()),
+        reinterpret_cast<const uint16_t*>(
+            value_cache.data_ptr<at::BFloat16>()),
+        block_tables.data_ptr<int32_t>(),
+        sequence_lengths.data_ptr<int32_t>(),
+        reinterpret_cast<uint16_t*>(output.data_ptr<at::BFloat16>()),
+        sequences, query_heads, kv_heads, head_size, value_head_size,
+        num_blocks, block_size, max_blocks_per_sequence, max_context,
+        scale_f32, stream.stream());
+  }
+  TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
+              "Loom CUDA paged decode attention launch failed: ",
+              loom_cuda_status_string(status), " (status ", status, ")");
+  paged_decode_attention_launches.fetch_add(1,
+                                             std::memory_order_relaxed);
+}
+
+void paged_decode_attention(
+    const at::Tensor& query, const at::Tensor& key_cache,
+    const at::Tensor& value_cache, const at::Tensor& block_tables,
+    const at::Tensor& sequence_lengths, at::Tensor output,
+    int64_t max_sequence_length, double scale) {
+  check_paged_decode_attention_contract(
+      query, key_cache, value_cache, block_tables, sequence_lengths, output,
+      max_sequence_length, scale);
+  launch_paged_decode_attention(query, key_cache, value_cache, block_tables,
+                                sequence_lengths, output,
+                                max_sequence_length, scale);
+}
+
+int64_t paged_decode_attention_launch_count() {
+  return paged_decode_attention_launches.load(std::memory_order_relaxed);
+}
+
+void reset_paged_decode_attention_launch_count() {
+  paged_decode_attention_launches.store(0, std::memory_order_relaxed);
+}
+
 }  // namespace
 
 TORCH_LIBRARY(loom_kernels, library) {
@@ -892,6 +1058,18 @@ TORCH_LIBRARY(loom_kernels, library) {
   library.def("reset_min_p_filter_launch_count() -> ()",
               &reset_min_p_filter_launch_count);
   library.def(
+      "paged_decode_attention(Tensor query, Tensor key_cache, Tensor "
+      "value_cache, Tensor block_tables, Tensor sequence_lengths, "
+      "Tensor(a!) output, int max_sequence_length, float scale) -> ()");
+  library.def(
+      "paged_decode_attention_unchecked(Tensor query, Tensor key_cache, "
+      "Tensor value_cache, Tensor block_tables, Tensor sequence_lengths, "
+      "Tensor(a!) output, int max_sequence_length, float scale) -> ()");
+  library.def("paged_decode_attention_launch_count() -> int",
+              &paged_decode_attention_launch_count);
+  library.def("reset_paged_decode_attention_launch_count() -> ()",
+              &reset_paged_decode_attention_launch_count);
+  library.def(
       "rope_paged_kv_write_(Tensor(a!) query, Tensor(b!) key, Tensor value, "
       "Tensor positions, Tensor cos_sin_cache, Tensor(c!) key_cache, "
       "Tensor(d!) value_cache, Tensor slot_mapping, bool is_neox) -> ()");
@@ -919,6 +1097,9 @@ TORCH_LIBRARY_IMPL(loom_kernels, CUDA, library) {
   library.impl("selected_token_logprobs", &selected_token_logprobs);
   library.impl("min_p_filter_", &min_p_filter);
   library.impl("min_p_filter_unchecked_", &launch_min_p_filter);
+  library.impl("paged_decode_attention", &paged_decode_attention);
+  library.impl("paged_decode_attention_unchecked",
+               &launch_paged_decode_attention);
   library.impl("rope_paged_kv_write_", &rope_paged_kv_write);
   library.impl("rope_paged_kv_write_unchecked_",
                &launch_rope_paged_kv_write);

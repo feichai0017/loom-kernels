@@ -54,9 +54,11 @@ execution, or lower dispatch overhead can create measurable engine value.
   tensors. The opt-in vLLM route is performance-gated: H20 measurements use
   Loom only for at least 32 rows and a 65,536-token vocabulary, with smaller
   decode batches falling back to vLLM;
-- paged MQA/GQA decode attention now has an engine-shaped Rust contract and
-  stable CPU oracle. CUDA and vLLM execution are intentionally still marked
-  unsupported until correctness and named-baseline gates exist;
+- paged MQA/GQA decode attention spans Rust contract/oracle, safe Rust/C ABI,
+  handwritten F32/FP16/BF16 CUDA, and a current-stream PyTorch out API. H20
+  tests pass against randomized PyTorch and vLLM FA3 references. The first
+  kernel beats FA3 consistently at context 16, but loses at 64+ tokens, so no
+  automatic vLLM replacement is enabled yet;
 
 ## Workspace
 
@@ -79,7 +81,7 @@ execution, or lower dispatch overhead can create measurable engine value.
 | P0 | RoPE+KV write, KV append/layout/quantization | removes extra HBM passes around KV-cache updates |
 | P0 | SwiGLU/GELU fused epilogues | combines activation, multiply, bias, and quantization |
 | P0 | sampling and selected-token logprob | reduces decode-tail launches and temporary tensors |
-| P1 | paged decode attention | base contract/oracle are ready; CUDA must beat the engine-selected backend |
+| P1 | paged decode attention | first short-context CUDA path is qualified; optimize 32-128 tokens before a shape-gated engine route |
 | P1 | MoE top-k, permutation, grouped dispatch | routing and movement often dominate small expert batches |
 | P1 | quantized GEMM epilogues | wrap vendor GEMM and own the fusion, not another basic GEMM |
 | P2 | communication-aware fusions | RMSNorm/all-reduce and TP epilogues after single-GPU evidence |
@@ -194,6 +196,11 @@ PYTHONPATH=python/src .venv-vllm/bin/python benchmarks/vllm_rope_paged_kv.py \
   --dtype bf16 --layout NHD --tokens 1,8,32,128,256,512 \
   --warmup 100 --iterations 2000 --repeats 5
 
+PYTHONPATH=python/src .venv-vllm/bin/python \
+  benchmarks/vllm_paged_decode_attention.py \
+  --dtype bf16 --batches 1,8,32 --contexts 16,32,64,128,256,512 \
+  --warmup 30 --iterations 200 --samples 7
+
 .venv-vllm/bin/python benchmarks/vllm_engine_rope_paged_kv.py \
   --model /path/to/Qwen2.5-0.5B-Instruct \
   --case 1x32x64 --case 8x32x64 --warmup 2 --repeats 5 \
@@ -290,6 +297,14 @@ blanket replacement. A separate
 [65,536-token boundary sweep](docs/results/h20-min-p-filter-vocab65536-20260722.json)
 measures `1.35x` at 32 rows and `2.35x` at 128 rows, validating the lower
 vocabulary gate.
+
+The paged-decode
+[operator report](docs/results/h20-paged-decode-attention-20260722.json)
+compares the first handwritten kernel directly with vLLM 0.24 FA3 over batch
+1/8/32 and context 16-512. CUDA Graph ratios at context 16 are
+`1.43x/1.44x/2.04x`; only batch 32 remains ahead at context 32 (`1.11x`), and
+all 64+ cases lose. This is evidence for a narrow short-context kernel and the
+next optimization target, not evidence for replacing the engine backend.
 
 For the Python build and engine configuration, see the
 [vLLM IR provider guide](docs/guides/vllm-ir-provider.md).

@@ -41,6 +41,9 @@
   masks, temporary-memory removal, crossover point, and vLLM routing decision.
 - [H20 min-p 65,536-vocabulary boundary report](results/h20-min-p-filter-vocab65536-20260722.json):
   direct evidence for the lower vocabulary gate at 32 and 128 rows.
+- [H20 paged decode-attention report](results/h20-paged-decode-attention-20260722.json):
+  randomized correctness plus the batch/context crossover against vLLM 0.24
+  FlashAttention FA3.
 - [H20 top-k/top-p selected-logprob engine report, baseline first](results/h20-vllm-selected-logprobs-baseline-first-20260722.json):
   vLLM-owned sampling with exact tokens/ranks and end-to-end latency evidence.
 - [H20 top-k/top-p selected-logprob engine report, Loom first](results/h20-vllm-selected-logprobs-loom-first-20260722.json):

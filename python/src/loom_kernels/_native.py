@@ -191,6 +191,33 @@ def _load() -> ctypes.CDLL:
             function = getattr(library, name)
             function.argtypes = min_p_filter_arguments
             function.restype = ctypes.c_int
+        paged_decode_attention_arguments = [
+            pointer,
+            pointer,
+            pointer,
+            pointer,
+            pointer,
+            pointer,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_float,
+            pointer,
+        ]
+        for name in (
+            "loom_cuda_paged_decode_attention_f32",
+            "loom_cuda_paged_decode_attention_f16",
+            "loom_cuda_paged_decode_attention_bf16",
+        ):
+            function = getattr(library, name)
+            function.argtypes = paged_decode_attention_arguments
+            function.restype = ctypes.c_int
         rope_paged_kv_arguments = [
             pointer,
             pointer,
@@ -582,5 +609,64 @@ def launch_rope_paged_kv_write(
         message = raw_message.decode("utf-8") if raw_message else "unknown status"
         raise NativeLibraryError(
             "Loom CUDA RoPE+paged-KV launch failed with status "
+            f"{status}: {message}"
+        )
+
+
+def launch_paged_decode_attention(
+    dtype: str,
+    query_pointer: int,
+    key_cache_pointer: int,
+    value_cache_pointer: int,
+    block_tables_pointer: int,
+    sequence_lengths_pointer: int,
+    output_pointer: int,
+    sequences: int,
+    query_heads: int,
+    kv_heads: int,
+    head_size: int,
+    value_head_size: int,
+    num_blocks: int,
+    block_size: int,
+    max_blocks_per_sequence: int,
+    max_sequence_length: int,
+    scale: float,
+    stream_pointer: int,
+) -> None:
+    """Submit base paged decode attention to an existing CUDA stream."""
+    function_name = {
+        "f32": "loom_cuda_paged_decode_attention_f32",
+        "f16": "loom_cuda_paged_decode_attention_f16",
+        "bf16": "loom_cuda_paged_decode_attention_bf16",
+    }.get(dtype)
+    if function_name is None:
+        raise NativeLibraryError(f"unsupported native dtype: {dtype}")
+
+    library = _load()
+    function = getattr(library, function_name)
+    status = function(
+        ctypes.c_void_p(query_pointer),
+        ctypes.c_void_p(key_cache_pointer),
+        ctypes.c_void_p(value_cache_pointer),
+        ctypes.c_void_p(block_tables_pointer),
+        ctypes.c_void_p(sequence_lengths_pointer),
+        ctypes.c_void_p(output_pointer),
+        sequences,
+        query_heads,
+        kv_heads,
+        head_size,
+        value_head_size,
+        num_blocks,
+        block_size,
+        max_blocks_per_sequence,
+        max_sequence_length,
+        scale,
+        ctypes.c_void_p(stream_pointer),
+    )
+    if status != 0:
+        raw_message = library.loom_cuda_status_string(status)
+        message = raw_message.decode("utf-8") if raw_message else "unknown status"
+        raise NativeLibraryError(
+            "Loom CUDA paged decode attention launch failed with status "
             f"{status}: {message}"
         )

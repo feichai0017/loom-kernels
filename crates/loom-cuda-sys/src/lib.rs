@@ -252,6 +252,66 @@ unsafe extern "C" {
         stream: *mut c_void,
     ) -> c_int;
 
+    pub fn loom_cuda_paged_decode_attention_f32(
+        query: *const f32,
+        key_cache: *const f32,
+        value_cache: *const f32,
+        block_tables: *const i32,
+        sequence_lengths: *const i32,
+        output: *mut f32,
+        sequences: u32,
+        query_heads: u32,
+        kv_heads: u32,
+        head_size: u32,
+        value_head_size: u32,
+        num_blocks: u32,
+        block_size: u32,
+        max_blocks_per_sequence: u32,
+        max_sequence_length: u32,
+        scale: f32,
+        stream: *mut c_void,
+    ) -> c_int;
+
+    pub fn loom_cuda_paged_decode_attention_f16(
+        query: *const u16,
+        key_cache: *const u16,
+        value_cache: *const u16,
+        block_tables: *const i32,
+        sequence_lengths: *const i32,
+        output: *mut u16,
+        sequences: u32,
+        query_heads: u32,
+        kv_heads: u32,
+        head_size: u32,
+        value_head_size: u32,
+        num_blocks: u32,
+        block_size: u32,
+        max_blocks_per_sequence: u32,
+        max_sequence_length: u32,
+        scale: f32,
+        stream: *mut c_void,
+    ) -> c_int;
+
+    pub fn loom_cuda_paged_decode_attention_bf16(
+        query: *const u16,
+        key_cache: *const u16,
+        value_cache: *const u16,
+        block_tables: *const i32,
+        sequence_lengths: *const i32,
+        output: *mut u16,
+        sequences: u32,
+        query_heads: u32,
+        kv_heads: u32,
+        head_size: u32,
+        value_head_size: u32,
+        num_blocks: u32,
+        block_size: u32,
+        max_blocks_per_sequence: u32,
+        max_sequence_length: u32,
+        scale: f32,
+        stream: *mut c_void,
+    ) -> c_int;
+
     pub fn loom_cuda_rope_paged_kv_write_f32(
         query: *mut f32,
         key: *mut f32,

@@ -11,6 +11,8 @@ mod greedy_sample;
 #[cfg(feature = "cuda")]
 mod min_p;
 #[cfg(feature = "cuda")]
+mod paged_decode;
+#[cfg(feature = "cuda")]
 mod rms_norm;
 #[cfg(feature = "cuda")]
 mod rope_paged_kv;

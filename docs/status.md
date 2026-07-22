@@ -36,9 +36,10 @@
   PyTorch mutation schemas, and an opt-in vLLM 0.24 processor override that
   cancels the softmax denominator instead of allocating probability and mask
   tensors;
-- a base paged MQA/GQA decode-attention Rust contract and stable CPU oracle for
-  one query per request, logical NHD caches, block-table indirection, distinct
-  K/V widths, and pre-mutation metadata validation; no CUDA support is claimed;
+- base paged MQA/GQA decode attention for one query per request: Rust contract
+  and stable CPU oracle, F32/FP16/BF16 handwritten CUDA/C ABI, safe Rust
+  entrypoints, contiguous NHD cache indirection, distinct K/V widths, and a
+  current-stream caller-allocated PyTorch operator capped at 1,024 tokens;
 - a C++ PyTorch dispatcher bridge using the current CUDA stream;
 - a source-adapter Python wheel with explicit framework extras, project
   metadata, license/readme payloads, and a CI install/entry-point smoke gate;
@@ -162,9 +163,9 @@
 - selected-token PyTorch tests cover arbitrary IDs/ranks, F32/FP16/BF16,
   Qwen's 151,936-token vocabulary, ties, padded rows, external streams,
   FakeTensor/schema validation, `torch.compile`, and CUDA Graph replay;
-- the current complete H20 Python suite passes 128 tests; the Rust core passes
+- the current complete H20 Python suite passes 144 tests; the Rust core passes
   30 contract/oracle tests, and the CUDA-feature workspace passes formatting,
-  Clippy, release build, plus four safe-wrapper CPU-oracle tests;
+  Clippy, release build, plus five safe-wrapper CPU-oracle tests;
 - against vLLM's exact `compute_logprobs + gather_logprobs(0)` path for the
   same caller-selected BF16 IDs, ranks were exact and maximum logprob error was
   `9.54e-7`; 1-128 row H20 speedup ratios were `2.77-3.78x`;
@@ -182,6 +183,16 @@
   1, 8, 32, and 128 rows. The vLLM adapter therefore requires at least 32 rows
   and a 65,536-token vocabulary, falling back below either threshold. A second
   65,536-vocabulary sweep measured `1.35x` and `2.35x` at 32 and 128 rows;
+- paged-decode focused tests pass 16/16 across F32/FP16/BF16, MQA/GQA,
+  shuffled physical blocks, partial pages, distinct value widths, external
+  streams, schema/FakeTensor, `torch.compile`, and launch telemetry; the safe
+  Rust F32 wrapper also matches the CPU oracle on H20;
+- against vLLM 0.24 FlashAttention FA3 for BF16 Qwen-style Hq/Hkv `32/8` and
+  head size 128, CUDA Graph speedups at context 16 are `1.426x`, `1.439x`, and
+  `2.036x` for batches 1, 8, and 32. Batch 32 remains `1.112x` ahead at context
+  32, while all tested 64-512-token cases are slower. Correctness support
+  remains available through 1,024 tokens, but no automatic vLLM route is
+  admitted from this evidence;
 
 See the [F32 report](results/h20-rms-norm-f32-smoke-20260721.json) and
 [low-precision report](results/h20-rms-norm-low-precision-20260721.json), plus
@@ -217,6 +228,9 @@ The [Min-P operator report](results/h20-min-p-filter-20260722.json) records the
 exact-mask gate, memory reduction, small-batch regression, and crossover point;
 the [65,536-token sweep](results/h20-min-p-filter-vocab65536-20260722.json)
 records the lower vocabulary boundary behind the vLLM routing threshold.
+The [paged decode-attention report](results/h20-paged-decode-attention-20260722.json)
+records randomized correctness and the explicit batch/context crossover
+against vLLM 0.24 FA3.
 
 ## Not Yet Proven
 
@@ -228,7 +242,8 @@ records the lower vocabulary boundary behind the vLLM routing threshold.
 - Min-P real-model invocation and end-to-end serving benefit;
 - Loom-owned logits preprocessing, top-k/top-p, stochastic sampling, and
   general top-k logprob integration;
-- paged decode-attention CUDA, framework, engine, and H20 performance gates;
+- paged decode-attention vLLM routing, real-model invocation, end-to-end
+  benefit, and competitive 32-1,024-token kernels;
 - integration into SGLang or a Rust-native engine path;
 - larger production-model and serving-workload validation;
 - automated binary-wheel packaging;

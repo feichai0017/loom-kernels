@@ -17,6 +17,7 @@ fn main() {
     let silu_and_mul_quant_source = cuda_dir.join("src/silu_and_mul_quant.cu");
     let greedy_sample_source = cuda_dir.join("src/greedy_sample.cu");
     let min_p_source = cuda_dir.join("src/min_p.cu");
+    let paged_decode_attention_source = cuda_dir.join("src/paged_decode_attention.cu");
     let rope_paged_kv_source = cuda_dir.join("src/rope_paged_kv.cu");
     println!("cargo:rerun-if-changed={}", header.display());
     println!("cargo:rerun-if-changed={}", rms_norm_source.display());
@@ -29,6 +30,10 @@ fn main() {
     );
     println!("cargo:rerun-if-changed={}", greedy_sample_source.display());
     println!("cargo:rerun-if-changed={}", min_p_source.display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        paged_decode_attention_source.display()
+    );
     println!("cargo:rerun-if-changed={}", rope_paged_kv_source.display());
 
     if env::var_os("CARGO_FEATURE_CUDA").is_none() {
@@ -61,6 +66,7 @@ fn main() {
         .file(&silu_and_mul_quant_source)
         .file(&greedy_sample_source)
         .file(&min_p_source)
+        .file(&paged_decode_attention_source)
         .file(&rope_paged_kv_source)
         .flag("-O3")
         .flag("-Xcompiler=-fPIC")
