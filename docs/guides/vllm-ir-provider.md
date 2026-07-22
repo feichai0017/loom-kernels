@@ -30,6 +30,12 @@ Unlike the parity-only integrations above, pinned Qwen2.5-0.5B H20 runs show
 an order-stable end-to-end latency and TPOT improvement for this narrow
 request contract.
 
+A fifth registration extends the same idea to general sampling without taking
+over policy: vLLM still applies masks, penalties, temperature, top-k/top-p,
+and RNG, while Loom computes only the chosen token's raw logprob and rank from
+the preserved BF16/FP16 logits. Pinned top-k/top-p H20 runs show exact tokens
+and ranks plus an order-stable end-to-end improvement.
+
 The registered contract is:
 
 ```text
@@ -78,6 +84,7 @@ from loom_kernels import (
     silu_and_mul_dynamic_fp8,
     silu_and_mul_dynamic_fp8_out,
     silu_and_mul_out,
+    selected_token_logprobs,
 )
 
 output = silu_and_mul(gate_and_up)
@@ -89,6 +96,7 @@ fp8_output, block_scales = silu_and_mul_dynamic_fp8(
 )
 
 token_ids, sampled_logprobs, sampled_ranks = greedy_sample_logprobs(logits)
+sampled_logprobs, sampled_ranks = selected_token_logprobs(logits, token_ids_i64)
 silu_and_mul_dynamic_fp8_out(
     gate_and_up_bf16,
     reusable_fp8_output,
@@ -198,6 +206,25 @@ have padded rows but require unit vocabulary stride. Every unsupported case
 runs the original vLLM sampler; speculative bonus-token sampling is also
 declined. Registration is version-gated to vLLM 0.24.
 
+To preserve vLLM's full sampling policy but avoid its full-vocabulary raw
+log-softmax output, use the general registration instead:
+
+```python
+from vllm import LLM
+from loom_kernels.vllm import register_vllm_selected_token_logprobs
+
+assert register_vllm_selected_token_logprobs() == "selected_token_logprobs"
+engine = LLM(model="/path/to/model")
+```
+
+This registration includes the narrower greedy registration, so pure-greedy
+batches keep the fused argmax path. Non-greedy and mixed batches qualify when
+vLLM 0.24 requests raw `logprobs=0` from BF16/FP16 logits and does not request
+specific-token or top-k logprob lists. vLLM executes its original F32
+processors and sampler first; Loom then scans the preserved raw logits for the
+selected int64 IDs. F32 logits and processed-logprob modes conservatively fall
+back because vLLM may mutate their storage in place.
+
 The provider can only replace a graph-visible activation-quant boundary. On
 the tested H20 stack, vLLM's automatic `fp8_per_block` selection uses a
 FlashInfer/DeepGEMM linear kernel that accepts BF16 and performs activation
@@ -284,6 +311,22 @@ PY
   --case 1x32x64 --case 8x32x64 --case 32x32x32 \
   --warmup 2 --repeats 5 --provider-order loom-first \
   --result-json /tmp/qwen25-greedy-logprobs-loom-first.json
+
+.venv-vllm/bin/python benchmarks/vllm_selected_token_logprobs.py \
+  --rows 1,2,4,8,16,32,64,128 --vocab-size 151936 --dtype bf16 \
+  --warmup 100 --iterations 1000 --repeats 7
+
+.venv-vllm/bin/python benchmarks/vllm_engine_greedy_logprobs.py \
+  --model /path/to/Qwen2.5-0.5B-Instruct --sampling-mode top-k-top-p \
+  --case 1x32x64 --case 8x32x64 --case 32x32x32 \
+  --warmup 2 --repeats 7 --provider-order baseline-first \
+  --result-json /tmp/qwen25-selected-logprobs-baseline-first.json
+
+.venv-vllm/bin/python benchmarks/vllm_engine_greedy_logprobs.py \
+  --model /path/to/Qwen2.5-0.5B-Instruct --sampling-mode top-k-top-p \
+  --case 1x32x64 --case 8x32x64 --case 32x32x32 \
+  --warmup 2 --repeats 7 --provider-order loom-first \
+  --result-json /tmp/qwen25-selected-logprobs-loom-first.json
 ```
 
 The microbenchmark compares `loom_cuda` and `vllm_c` through the same vLLM IR
@@ -347,6 +390,17 @@ rank, recorded 1120 Loom submissions only in each Loom process, and measured
 [baseline-first engine report](../results/h20-vllm-greedy-logprobs-baseline-first-20260722.json),
 and [Loom-first engine report](../results/h20-vllm-greedy-logprobs-loom-first-20260722.json).
 
+For general selected-token logprobs, caller-selected IDs covered ranks from
+288 through 151,842 over the same 151,936-token BF16 vocabulary. Ranks were
+exact, maximum logprob error was `9.54e-7`, and the operator measured
+`2.77-3.78x` faster for 1-128 rows. Baseline-first and Loom-first Qwen2.5
+top-k/top-p runs preserved every vLLM-selected token and rank, recorded 1440
+Loom submissions only in each Loom process, and measured `1.044-1.125x`
+batch-latency plus `1.054-1.130x` TPOT ratios. See the
+[operator report](../results/h20-selected-token-logprobs-20260722.json),
+[baseline-first engine report](../results/h20-vllm-selected-logprobs-baseline-first-20260722.json),
+and [Loom-first engine report](../results/h20-vllm-selected-logprobs-loom-first-20260722.json).
+
 The compatible arithmetic and schema follow vLLM 0.24's
 [fused CUDA implementation](https://github.com/vllm-project/vllm/blob/v0.24.0/csrc/libtorch_stable/quantization/fused_kernels/fused_silu_mul_block_quant.cu)
 and its documented
@@ -365,12 +419,13 @@ dispatcher bridge follows PyTorch's
 - one selectable IR provider (`fused_add_rms_norm`), one opt-in out-of-tree
   layer replacement (`SiluAndMul`), and one vLLM-version-specific
   activation-quant fusion-table replacement, plus a vLLM 0.24-specific
-  RoPE+native-KV compiler-pass adapter and pure-greedy sampled-logprob sampler
-  override;
+  RoPE+native-KV compiler-pass adapter and greedy/general selected-token
+  sampled-logprob sampler overrides;
 - the activation-quant provider requires a graph-visible quantization boundary;
   it does not intercept vLLM's fused BF16-input FlashInfer/DeepGEMM path;
 - the isolated operator is faster on H20 and real-model invocation is proven,
   but no model-level speedup has been established for either FP8 activation
   fusion or RoPE+paged-KV;
-- the sampler fast path does not cover penalties, masks, top-k/top-p/min-p,
-  stochastic sampling, top-k logprobs, or non-raw logprob modes.
+- vLLM-owned penalties, masks, top-k/top-p/min-p, and stochastic sampling can
+  feed the selected-token path, but Loom does not accelerate those selection
+  stages yet; top-k logprob lists and non-raw modes still fall back.

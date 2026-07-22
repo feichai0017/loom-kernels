@@ -43,7 +43,9 @@ import { evidence, repositoryUrl } from "../data/site";
         RoPE+paged-KV reaches 2.30–2.40× against vLLM's two separate dispatcher
         calls at 1–512 tokens, then narrows toward parity for long prefill. The
         greedy sampled-logprob fusion reaches 3.16–4.35× against vLLM's exact
-        full decode-tail sequence for 1–128 Qwen-vocabulary rows.
+        full decode-tail sequence for 1–128 Qwen-vocabulary rows. The general
+        selected-token path reaches 2.77–3.78× while leaving sampling policy
+        with vLLM.
       </p>
 
       <h2>Validation ladder</h2>
@@ -77,6 +79,14 @@ python benchmarks/vllm_silu_and_mul_dynamic_fp8.py \
 .venv-vllm/bin/python benchmarks/vllm_engine_greedy_logprobs.py \
   --model /path/to/Qwen2.5-0.5B-Instruct \
   --case 1x32x64 --case 8x32x64 --case 32x32x32 \
+  --provider-order baseline-first
+
+.venv-vllm/bin/python benchmarks/vllm_selected_token_logprobs.py \
+  --rows 1,2,4,8,16,32,64,128 --vocab-size 151936 --dtype bf16
+
+.venv-vllm/bin/python benchmarks/vllm_engine_greedy_logprobs.py \
+  --model /path/to/Qwen2.5-0.5B-Instruct --sampling-mode top-k-top-p \
+  --case 1x32x64 --case 8x32x64 --case 32x32x32 \
   --provider-order baseline-first</code></pre>
       <p>
         The pinned Qwen2.5 runs matched every generated token and recorded
@@ -96,6 +106,13 @@ python benchmarks/vllm_silu_and_mul_dynamic_fp8.py \
         hits only on the fused side; batch-latency ratios were 1.129–1.250× and
         TPOT ratios were 1.147–1.257×. This is a real-engine win for pure greedy
         requests with <code>logprobs=0</code>, not a general sampler claim.
+      </p>
+      <p>
+        The selected-token top-k/top-p A/B keeps vLLM's sampler and RNG intact,
+        then replaces only its full raw-logprob tail. Both provider orders
+        matched every token and rank within 1.20e-6, with 1440 Loom launches
+        only on the candidate side. Batch-latency ratios were 1.044–1.125× and
+        TPOT ratios were 1.054–1.130×.
       </p>
       <p>
         Machine-readable reports are versioned in{" "}

@@ -42,6 +42,13 @@ def greedy_sample_logprobs(*args: Any, **kwargs: Any) -> Any:
     return implementation(*args, **kwargs)
 
 
+def selected_token_logprobs(*args: Any, **kwargs: Any) -> Any:
+    """Lazily normalize and rank one caller-selected token per logits row."""
+    from .torch_ops import selected_token_logprobs as implementation
+
+    return implementation(*args, **kwargs)
+
+
 def silu_and_mul(*args: Any, **kwargs: Any) -> Any:
     """Lazily execute fused split-half SiLU-and-Mul."""
     from .torch_ops import silu_and_mul as implementation
@@ -77,6 +84,7 @@ __all__ = [
     "rms_norm_dynamic_fp8",
     "rms_norm_dynamic_fp8_out",
     "rope_paged_kv_write_",
+    "selected_token_logprobs",
     "silu_and_mul",
     "silu_and_mul_dynamic_fp8",
     "silu_and_mul_dynamic_fp8_out",

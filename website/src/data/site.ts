@@ -50,12 +50,18 @@ export const supportedOperators = [
     boundary: "Argmax + logsumexp + gather + tie rank",
     status: "supported",
   },
+  {
+    name: "Selected-token logprob + rank",
+    dtypes: "F32 · FP16 · BF16",
+    boundary: "Engine-owned sampling + one-pass normalization",
+    status: "supported",
+  },
 ];
 
 export const nextOperators = [
   {
-    name: "General sampling",
-    reason: "Extend the greedy win to penalties, top-k/top-p, and RNG.",
+    name: "Loom-owned sampling",
+    reason: "Fuse logits processing, top-k/top-p, and deterministic RNG where profiling pays.",
   },
   {
     name: "MoE routing + movement",
@@ -103,5 +109,11 @@ export const evidence = [
     shape: "Qwen2.5-0.5B · batches 1 / 8 / 32",
     result: "1.129–1.250×",
     detail: "Order-stable real-engine batch-latency ratio",
+  },
+  {
+    operator: "Selected-token logprob + rank",
+    shape: "Qwen2.5 top-k/top-p · batches 1 / 8 / 32",
+    result: "1.044–1.125×",
+    detail: "vLLM-owned sampling; order-stable engine ratio",
   },
 ];

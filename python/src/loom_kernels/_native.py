@@ -157,6 +157,24 @@ def _load() -> ctypes.CDLL:
             function = getattr(library, name)
             function.argtypes = greedy_sample_arguments
             function.restype = ctypes.c_int
+        selected_token_logprobs_arguments = [
+            pointer,
+            pointer,
+            pointer,
+            pointer,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint64,
+            pointer,
+        ]
+        for name in (
+            "loom_cuda_selected_token_logprobs_f32",
+            "loom_cuda_selected_token_logprobs_f16",
+            "loom_cuda_selected_token_logprobs_bf16",
+        ):
+            function = getattr(library, name)
+            function.argtypes = selected_token_logprobs_arguments
+            function.restype = ctypes.c_int
         rope_paged_kv_arguments = [
             pointer,
             pointer,
@@ -396,6 +414,47 @@ def launch_greedy_sample_logprobs(
         message = raw_message.decode("utf-8") if raw_message else "unknown status"
         raise NativeLibraryError(
             "Loom CUDA greedy sampling launch failed with status "
+            f"{status}: {message}"
+        )
+
+
+def launch_selected_token_logprobs(
+    dtype: str,
+    logits_pointer: int,
+    token_ids_pointer: int,
+    logprobs_pointer: int,
+    ranks_pointer: int,
+    rows: int,
+    vocab_size: int,
+    row_stride: int,
+    stream_pointer: int,
+) -> None:
+    """Submit selected-token normalization and rank computation."""
+    function_name = {
+        "f32": "loom_cuda_selected_token_logprobs_f32",
+        "f16": "loom_cuda_selected_token_logprobs_f16",
+        "bf16": "loom_cuda_selected_token_logprobs_bf16",
+    }.get(dtype)
+    if function_name is None:
+        raise NativeLibraryError(f"unsupported native dtype: {dtype}")
+
+    library = _load()
+    function = getattr(library, function_name)
+    status = function(
+        ctypes.c_void_p(logits_pointer),
+        ctypes.c_void_p(token_ids_pointer),
+        ctypes.c_void_p(logprobs_pointer),
+        ctypes.c_void_p(ranks_pointer),
+        rows,
+        vocab_size,
+        row_stride,
+        ctypes.c_void_p(stream_pointer),
+    )
+    if status != 0:
+        raw_message = library.loom_cuda_status_string(status)
+        message = raw_message.decode("utf-8") if raw_message else "unknown status"
+        raise NativeLibraryError(
+            "Loom CUDA selected-token logprob launch failed with status "
             f"{status}: {message}"
         )
 

@@ -123,6 +123,25 @@ int loom_cuda_greedy_sample_logprobs_bf16(
     int64_t* ranks, uint32_t rows, uint32_t vocab_size, uint64_t row_stride,
     void* stream);
 
+// Compute only the normalized logprob and tie-aware rank of one caller-selected
+// token per row. This preserves engine-owned sampling policies while avoiding
+// a full [rows, vocab_size] F32 log-softmax output. token_ids are int64 engine
+// metadata and must be in [0, vocab_size); logits must be finite.
+int loom_cuda_selected_token_logprobs_f32(
+    const float* logits, const int64_t* token_ids, float* logprobs,
+    int64_t* ranks, uint32_t rows, uint32_t vocab_size, uint64_t row_stride,
+    void* stream);
+
+int loom_cuda_selected_token_logprobs_f16(
+    const uint16_t* logits, const int64_t* token_ids, float* logprobs,
+    int64_t* ranks, uint32_t rows, uint32_t vocab_size, uint64_t row_stride,
+    void* stream);
+
+int loom_cuda_selected_token_logprobs_bf16(
+    const uint16_t* logits, const int64_t* token_ids, float* logprobs,
+    int64_t* ranks, uint32_t rows, uint32_t vocab_size, uint64_t row_stride,
+    void* stream);
+
 // Fused in-place RoPE and paged K/V cache write. Query, key, and value have
 // logical [tokens, heads, dim] dimensions, a unit dim stride, and explicit
 // token/head element strides so packed-QKV views do not need materialization.

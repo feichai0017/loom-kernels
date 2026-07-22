@@ -33,6 +33,12 @@
   pinned Qwen2.5 path hits, exact outputs, and real-engine latency/TPOT benefit.
 - [H20 greedy sampled-logprob engine report, Loom first](results/h20-vllm-greedy-logprobs-loom-first-20260722.json):
   reverse-order confirmation of the same correctness and performance result.
+- [H20 selected-token logprob operator report](results/h20-selected-token-logprobs-20260722.json):
+  arbitrary selected ranks, exact vLLM rank parity, and 1-128 row latency.
+- [H20 top-k/top-p selected-logprob engine report, baseline first](results/h20-vllm-selected-logprobs-baseline-first-20260722.json):
+  vLLM-owned sampling with exact tokens/ranks and end-to-end latency evidence.
+- [H20 top-k/top-p selected-logprob engine report, Loom first](results/h20-vllm-selected-logprobs-loom-first-20260722.json):
+  reverse-order exact-output and end-to-end latency evidence.
 
 Only results under `docs/results` count as performance evidence. A CPU test, a
 successful CUDA launch, or an isolated number without a named baseline is not a

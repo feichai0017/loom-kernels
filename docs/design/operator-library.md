@@ -115,7 +115,7 @@ the composed path. Because the composed path rounds that temporary tensor, it
 is a useful performance comparison but not an exact semantic baseline; vLLM's
 own fused per-block operator is the compatibility baseline.
 
-## Greedy-Sampling+Selected-Logprob Contract
+## Sampling And Selected-Logprob Contracts
 
 The decode-tail operator consumes finite rank-2 F32, FP16, or BF16 logits with
 a unit vocabulary stride and an explicit, possibly padded row stride. For each
@@ -135,6 +135,20 @@ intercepts vLLM 0.24 requests where every row is greedy, `max_num_logprobs` is
 zero, raw logprobs are requested, and masks, penalties, bad words, thinking
 state, and argmax-changing processors are inactive. Other requests execute
 vLLM's original sampler unchanged.
+
+The complementary `selected_token_logprobs` contract accepts one caller-owned
+int64 token ID per row and returns only that token's F32 raw logprob plus its
+tie-aware int64 rank. One CUDA block loads the selected raw logit, computes an
+online logsumexp over the row, and counts logits greater than or equal to the
+selected value. It never materializes `[rows, vocab_size]` F32 logprobs.
+
+Its vLLM 0.24 adapter deliberately does not own sampling policy. vLLM still
+converts logits to F32, applies masks/processors/penalties and temperature,
+runs greedy or random top-k/top-p selection, and consumes RNG in its original
+order. Loom runs afterward against the preserved BF16/FP16 raw logits only for
+`raw_logprobs` requests with `max_num_logprobs == 0`; all-greedy batches retain
+the narrower fused argmax path. F32 logits, top-k logprob lists, specific-token
+lists, processed-logprob modes, and version-mismatched vLLM builds fall back.
 
 ## Operator Contract
 

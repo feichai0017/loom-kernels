@@ -63,9 +63,10 @@ valuable epilogues, and evidence around it.
 | logits bias, temperature, masks, and bad-word suppression | P0 | planned | one logits preprocessing pass |
 | repetition, presence, and frequency penalties | P0 | planned | sparse history-aware update |
 | greedy argmax+sampled-token raw logprob | P0 | supported | one-pass selection, normalization, gather, and tie-aware rank |
+| general selected-token raw logprob+rank | P0 | supported | engine-owned sampling followed by one-pass normalization and tie-aware rank |
 | deterministic RNG sampling | P0 | planned | token selection without host round trips |
 | top-k, top-p, min-p, and renormalization | P0 | planned | fused candidate filtering and sampling |
-| general selected-token logprob and top-k logprobs | P0 | planned | avoid full-vocabulary probability tensors |
+| top-k logprobs | P0 | planned | avoid full-vocabulary probability tensors when multiple candidates are returned |
 | sharded-vocabulary top-k/logsumexp merge | P1 | planned | tensor-parallel token selection |
 | structured-output bitmask application | P1 | profile-gated | grammar mask plus logits processing |
 
@@ -111,8 +112,9 @@ the boundary or an isolated implementation is measurably useful.
 
 ## Implementation Order
 
-1. Extend the proven pure-greedy sampled-logprob fast path with fused logits
-   preprocessing, top-k/top-p, and deterministic RNG sampling.
+1. Extend the proven engine-owned selected-token path with fused logits
+   preprocessing, top-k/top-p, and deterministic RNG sampling where profiling
+   shows additional value.
 2. Optimize the real-engine RoPE+paged-KV boundary only where profiling shows
    TPOT materiality; keep its current parity result explicit.
 3. Add MoE routing/movement before attempting a full grouped-GEMM stack.

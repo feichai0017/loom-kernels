@@ -350,6 +350,14 @@ impl Backend for CudaBackend {
             OperatorSpec::GreedySampleLogprobs(_) => {
                 Support::Unsupported("CUDA greedy sampling supports F32, FP16, and BF16 logits")
             }
+            OperatorSpec::SelectedTokenLogprobs(spec)
+                if matches!(spec.dtype(), DType::F32 | DType::F16 | DType::Bf16) =>
+            {
+                Support::Supported
+            }
+            OperatorSpec::SelectedTokenLogprobs(_) => Support::Unsupported(
+                "CUDA selected-token logprobs support F32, FP16, and BF16 logits",
+            ),
             OperatorSpec::RotaryEmbedding(_) => Support::Unsupported(
                 "standalone CUDA RoPE is not exposed yet; use the fused RoPE+paged-KV contract",
             ),

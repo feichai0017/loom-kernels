@@ -192,6 +192,39 @@ unsafe extern "C" {
         stream: *mut c_void,
     ) -> c_int;
 
+    pub fn loom_cuda_selected_token_logprobs_f32(
+        logits: *const f32,
+        token_ids: *const i64,
+        logprobs: *mut f32,
+        ranks: *mut i64,
+        rows: u32,
+        vocab_size: u32,
+        row_stride: u64,
+        stream: *mut c_void,
+    ) -> c_int;
+
+    pub fn loom_cuda_selected_token_logprobs_f16(
+        logits: *const u16,
+        token_ids: *const i64,
+        logprobs: *mut f32,
+        ranks: *mut i64,
+        rows: u32,
+        vocab_size: u32,
+        row_stride: u64,
+        stream: *mut c_void,
+    ) -> c_int;
+
+    pub fn loom_cuda_selected_token_logprobs_bf16(
+        logits: *const u16,
+        token_ids: *const i64,
+        logprobs: *mut f32,
+        ranks: *mut i64,
+        rows: u32,
+        vocab_size: u32,
+        row_stride: u64,
+        stream: *mut c_void,
+    ) -> c_int;
+
     pub fn loom_cuda_rope_paged_kv_write_f32(
         query: *mut f32,
         key: *mut f32,

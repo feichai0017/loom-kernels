@@ -16,8 +16,8 @@ execution, or lower dispatch overhead can create measurable engine value.
 ## Current Status
 
 - `loom-kernels`: dtype, tensor, capability, normalization, quantization,
-  split-half SiLU-and-Mul, RoPE/KV, and greedy-sampling contracts plus CPU
-  oracles;
+  split-half SiLU-and-Mul, RoPE/KV, greedy sampling, and arbitrary
+  selected-token logprob contracts plus CPU oracles;
 - `loom-cuda`: safe CUDA stream/buffer/event ownership and checked dispatch;
 - `loom-cuda-sys`: dependency-light raw C ABI;
 - handwritten F32 plus vectorized FP16/BF16 RMSNorm, fused Add+RMSNorm,
@@ -43,8 +43,12 @@ execution, or lower dispatch overhead can create measurable engine value.
   decode-tail sequence for 1-128 Qwen-sized rows; order-reversed real
   Qwen2.5-0.5B runs show `1.129-1.250x` batch-latency ratios with exact tokens
   and sampled-token ranks;
-- RMSNorm+FP8 is bitwise compatible with vLLM's named CUDA baseline; routing it
-  through a real engine graph is the remaining integration gate.
+- general selected-token raw logprob keeps vLLM responsible for masks,
+  penalties, temperature, top-k/top-p, RNG, and token selection, then replaces
+  only its full-vocabulary F32 `log_softmax + gather/rank` tail. On H20 the
+  operator is `2.77-3.78x` faster for 1-128 Qwen-sized rows; order-reversed
+  Qwen2.5 top-k/top-p runs show exact tokens/ranks and `1.044-1.125x`
+  batch-latency ratios;
 
 ## Workspace
 
@@ -198,6 +202,18 @@ PYTHONPATH=python/src .venv-vllm/bin/python \
   --case 1x32x64 --case 8x32x64 --case 32x32x32 \
   --warmup 2 --repeats 5 --provider-order baseline-first \
   --result-json /tmp/loom-greedy-logprobs-ab.json
+
+PYTHONPATH=python/src .venv-vllm/bin/python \
+  benchmarks/vllm_selected_token_logprobs.py \
+  --rows 1,2,4,8,16,32,64,128 --vocab-size 151936 --dtype bf16 \
+  --warmup 100 --iterations 1000 --repeats 7
+
+PYTHONPATH=python/src .venv-vllm/bin/python \
+  benchmarks/vllm_engine_greedy_logprobs.py \
+  --model /path/to/Qwen2.5-0.5B-Instruct --sampling-mode top-k-top-p \
+  --case 1x32x64 --case 8x32x64 --case 32x32x32 \
+  --warmup 2 --repeats 7 --provider-order baseline-first \
+  --result-json /tmp/loom-selected-logprobs-ab.json
 ```
 
 The H20 reports cover
@@ -243,6 +259,18 @@ Qwen2.5 engine gates both pass. Across batches 1, 8, and 32, batch-latency
 ratios are `1.129-1.250x` and TPOT ratios are `1.147-1.257x`, with 1120 Loom
 path hits only in each fused process. This claim is deliberately limited to
 pure greedy requests asking for only the sampled token's raw logprob.
+
+The general selected-token
+[operator report](docs/results/h20-selected-token-logprobs-20260722.json)
+uses caller-selected IDs spanning the vocabulary and compares against vLLM's
+exact full-logprob path. Ranks are exact, maximum logprob error is `9.54e-7`,
+and the H20 ratio is `2.77-3.78x` for 1-128 rows. In order-reversed Qwen2.5
+top-k/top-p engine gates, vLLM still owns sampling and RNG; every token and
+rank matches, 1440 Loom launches occur only in Loom processes, batch-latency
+ratios span `1.044-1.125x`, and TPOT ratios span `1.054-1.130x`. See the
+[baseline-first](docs/results/h20-vllm-selected-logprobs-baseline-first-20260722.json)
+and [Loom-first](docs/results/h20-vllm-selected-logprobs-loom-first-20260722.json)
+reports. This does not claim Loom accelerates top-k/top-p selection itself.
 
 For the Python build and engine configuration, see the
 [vLLM IR provider guide](docs/guides/vllm-ir-provider.md).

@@ -225,6 +225,21 @@ pub struct GreedySampleLogprobsSpec {
     dtype: DType,
 }
 
+/// Contract for normalizing and ranking one caller-selected token per row.
+///
+/// Logits are contiguous `[rows, vocab_size]`; token IDs are one int64 value
+/// per row and must be in `[0, vocab_size)`. Outputs are F32 logprobs and
+/// int64 ranks. Rank uses vLLM's tie-aware definition: the number of logits
+/// greater than or equal to the selected logit. This boundary lets an engine
+/// keep its own greedy, top-k/top-p, penalty, and random-sampling policy while
+/// avoiding a materialized full-vocabulary F32 log-softmax tensor.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SelectedTokenLogprobsSpec {
+    rows: usize,
+    vocab_size: usize,
+    dtype: DType,
+}
+
 /// Pairing convention used by rotary positional embeddings.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum RotaryStyle {
@@ -532,6 +547,38 @@ impl GreedySampleLogprobsSpec {
     }
 }
 
+impl SelectedTokenLogprobsSpec {
+    /// Creates a validated contiguous logits contract.
+    pub fn new(rows: usize, vocab_size: usize, dtype: DType) -> Result<Self, ContractError> {
+        if rows == 0 || vocab_size == 0 {
+            return Err(ContractError::ZeroDimension);
+        }
+        rows.checked_mul(vocab_size)
+            .ok_or(ContractError::ElementCountOverflow)?;
+        Ok(Self {
+            rows,
+            vocab_size,
+            dtype,
+        })
+    }
+
+    pub const fn rows(self) -> usize {
+        self.rows
+    }
+
+    pub const fn vocab_size(self) -> usize {
+        self.vocab_size
+    }
+
+    pub const fn dtype(self) -> DType {
+        self.dtype
+    }
+
+    pub const fn logits_numel(self) -> usize {
+        self.rows * self.vocab_size
+    }
+}
+
 impl SiluAndMulSpec {
     /// Creates a validated contiguous split-half SwiGLU contract.
     pub fn new(rows: usize, width: usize, dtype: DType) -> Result<Self, ContractError> {
@@ -670,6 +717,7 @@ pub enum OperatorSpec {
     SiluAndMul(SiluAndMulSpec),
     SiluAndMulDynamicFp8(SiluAndMulDynamicFp8Spec),
     GreedySampleLogprobs(GreedySampleLogprobsSpec),
+    SelectedTokenLogprobs(SelectedTokenLogprobsSpec),
     RotaryEmbedding(RotaryEmbeddingSpec),
     RopePagedKvWrite(RopePagedKvWriteSpec),
 }
@@ -720,6 +768,11 @@ pub enum ContractError {
         first_token: usize,
         second_token: usize,
         slot: usize,
+    },
+    TokenIdOutOfBounds {
+        row: usize,
+        token_id: i64,
+        vocab_size: usize,
     },
     LengthMismatch {
         buffer: &'static str,
@@ -777,6 +830,14 @@ impl fmt::Display for ContractError {
             } => write!(
                 formatter,
                 "cache slot {slot} is assigned to both token {first_token} and token {second_token}"
+            ),
+            Self::TokenIdOutOfBounds {
+                row,
+                token_id,
+                vocab_size,
+            } => write!(
+                formatter,
+                "selected token ID {token_id} for row {row} is outside [0, {vocab_size})"
             ),
             Self::LengthMismatch {
                 buffer,
@@ -1090,6 +1151,39 @@ pub fn greedy_sample_logprobs_bf16_reference(
     greedy_sample_logprobs_reference(logits, token_ids, logprobs, spec, DType::Bf16)
 }
 
+/// Returns F32 logprobs and tie-aware ranks for caller-selected F32 tokens.
+pub fn selected_token_logprobs_f32_reference(
+    logits: &[f32],
+    token_ids: &[i64],
+    logprobs: &mut [f32],
+    ranks: &mut [i64],
+    spec: SelectedTokenLogprobsSpec,
+) -> Result<(), ContractError> {
+    selected_token_logprobs_reference(logits, token_ids, logprobs, ranks, spec, DType::F32)
+}
+
+/// Returns F32 logprobs and tie-aware ranks for caller-selected FP16 tokens.
+pub fn selected_token_logprobs_f16_reference(
+    logits: &[f16],
+    token_ids: &[i64],
+    logprobs: &mut [f32],
+    ranks: &mut [i64],
+    spec: SelectedTokenLogprobsSpec,
+) -> Result<(), ContractError> {
+    selected_token_logprobs_reference(logits, token_ids, logprobs, ranks, spec, DType::F16)
+}
+
+/// Returns F32 logprobs and tie-aware ranks for caller-selected BF16 tokens.
+pub fn selected_token_logprobs_bf16_reference(
+    logits: &[bf16],
+    token_ids: &[i64],
+    logprobs: &mut [f32],
+    ranks: &mut [i64],
+    spec: SelectedTokenLogprobsSpec,
+) -> Result<(), ContractError> {
+    selected_token_logprobs_reference(logits, token_ids, logprobs, ranks, spec, DType::Bf16)
+}
+
 /// Applies vLLM-compatible F32 rotary embedding to Q and K in place.
 pub fn rotary_embedding_f32_reference(
     query: &mut [f32],
@@ -1265,6 +1359,61 @@ fn greedy_sample_logprobs_reference<T: LogitElement>(
             .sum::<f64>();
         *token_id = maximum_index as u32;
         *logprob = -(exponential_sum.ln() as f32);
+    }
+    Ok(())
+}
+
+fn selected_token_logprobs_reference<T: LogitElement>(
+    logits: &[T],
+    token_ids: &[i64],
+    logprobs: &mut [f32],
+    ranks: &mut [i64],
+    spec: SelectedTokenLogprobsSpec,
+    expected_dtype: DType,
+) -> Result<(), ContractError> {
+    if spec.dtype() != expected_dtype {
+        return Err(ContractError::UnsupportedDType(spec.dtype()));
+    }
+    require_len("logits", logits.len(), spec.logits_numel())?;
+    require_len("token_ids", token_ids.len(), spec.rows())?;
+    require_len("logprobs", logprobs.len(), spec.rows())?;
+    require_len("ranks", ranks.len(), spec.rows())?;
+
+    for (row_index, (((row, &token_id), logprob), rank)) in logits
+        .chunks_exact(spec.vocab_size())
+        .zip(token_ids.iter())
+        .zip(logprobs.iter_mut())
+        .zip(ranks.iter_mut())
+        .enumerate()
+    {
+        let selected_index =
+            usize::try_from(token_id).map_err(|_| ContractError::TokenIdOutOfBounds {
+                row: row_index,
+                token_id,
+                vocab_size: spec.vocab_size(),
+            })?;
+        if selected_index >= spec.vocab_size() {
+            return Err(ContractError::TokenIdOutOfBounds {
+                row: row_index,
+                token_id,
+                vocab_size: spec.vocab_size(),
+            });
+        }
+
+        let selected = row[selected_index].to_f32();
+        let maximum = row
+            .iter()
+            .map(|&value| value.to_f32())
+            .fold(f32::NEG_INFINITY, f32::max);
+        let exponential_sum = row
+            .iter()
+            .map(|&value| f64::from(value.to_f32() - maximum).exp())
+            .sum::<f64>();
+        *logprob = selected - maximum - exponential_sum.ln() as f32;
+        *rank = row
+            .iter()
+            .filter(|&&value| value.to_f32() >= selected)
+            .count() as i64;
     }
     Ok(())
 }
@@ -2123,6 +2272,69 @@ mod tests {
                 buffer: "token_ids",
                 expected: 1,
                 actual: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn selected_token_logprobs_normalizes_and_counts_tie_aware_ranks() {
+        let spec = SelectedTokenLogprobsSpec::new(2, 4, DType::F32).unwrap();
+        let logits = [1.0_f32, 3.0, 3.0, -1.0, -2.0, -1.0, 2.0, 0.0];
+        let token_ids = [0_i64, 1_i64];
+        let mut logprobs = [0.0_f32; 2];
+        let mut ranks = [0_i64; 2];
+
+        selected_token_logprobs_f32_reference(&logits, &token_ids, &mut logprobs, &mut ranks, spec)
+            .unwrap();
+
+        let first_sum = (-2.0_f64).exp() + 1.0 + 1.0 + (-4.0_f64).exp();
+        let second_sum = (-4.0_f64).exp() + (-3.0_f64).exp() + 1.0 + (-2.0_f64).exp();
+        assert!((logprobs[0] - (-2.0 - first_sum.ln() as f32)).abs() < 1.0e-6);
+        assert!((logprobs[1] - (-3.0 - second_sum.ln() as f32)).abs() < 1.0e-6);
+        assert_eq!(ranks, [3, 3]);
+    }
+
+    #[test]
+    fn selected_token_logprobs_validates_ids_and_low_precision_buffers() {
+        let spec = SelectedTokenLogprobsSpec::new(1, 3, DType::Bf16).unwrap();
+        let logits = [
+            bf16::from_f32(-1.0),
+            bf16::from_f32(2.0),
+            bf16::from_f32(0.5),
+        ];
+        let mut logprobs = [0.0_f32];
+        let mut ranks = [0_i64];
+        selected_token_logprobs_bf16_reference(&logits, &[2_i64], &mut logprobs, &mut ranks, spec)
+            .unwrap();
+        assert!(logprobs[0].is_finite() && logprobs[0] < 0.0);
+        assert_eq!(ranks, [2]);
+
+        assert_eq!(
+            selected_token_logprobs_bf16_reference(
+                &logits,
+                &[-1_i64],
+                &mut logprobs,
+                &mut ranks,
+                spec,
+            ),
+            Err(ContractError::TokenIdOutOfBounds {
+                row: 0,
+                token_id: -1,
+                vocab_size: 3,
+            })
+        );
+        assert_eq!(
+            selected_token_logprobs_bf16_reference(
+                &logits,
+                &[3_i64],
+                &mut logprobs,
+                &mut ranks,
+                spec,
+            ),
+            Err(ContractError::TokenIdOutOfBounds {
+                row: 0,
+                token_id: 3,
+                vocab_size: 3,
             })
         );
     }

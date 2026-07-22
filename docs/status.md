@@ -27,13 +27,18 @@
 - one-block-per-row F32/FP16/BF16 CUDA fusion of argmax, online logsumexp,
   selected logprob, and vLLM-compatible maximum-tie rank, including padded
   vocabulary row strides;
+- arbitrary selected-token contracts and CPU oracles with int64 IDs, F32 raw
+  logprobs, and vLLM-compatible tie-aware ranks;
+- one-block-per-row F32/FP16/BF16 CUDA selected-token normalization and rank,
+  preserving caller-owned sampling policy without a full-vocabulary F32
+  logprob tensor;
 - a C++ PyTorch dispatcher bridge using the current CUDA stream;
 - a source-adapter Python wheel with explicit framework extras, project
   metadata, license/readme payloads, and a CI install/entry-point smoke gate;
 - a `loom_cuda` vLLM IR provider with native fallback and an opt-in vLLM
   `SiluAndMul` out-of-tree layer replacement, plus an opt-in activation-quant
   fusion-table replacement, RoPE+KV compiler-pass adapter, and pure-greedy
-  sampled-logprob sampler fast path for vLLM 0.24;
+  plus general selected-token sampled-logprob fast paths for vLLM 0.24;
 - per-operator JSON correctness/latency benchmarks and named vLLM baselines.
 
 ## Validated
@@ -146,6 +151,22 @@
   `1.129-1.250x` and TPOT ratios were `1.147-1.257x`. This establishes a
   model-level win for the deliberately narrow pure-greedy `logprobs=0` path,
   not for general sampling.
+- selected-token PyTorch tests cover arbitrary IDs/ranks, F32/FP16/BF16,
+  Qwen's 151,936-token vocabulary, ties, padded rows, external streams,
+  FakeTensor/schema validation, `torch.compile`, and CUDA Graph replay;
+- the current complete H20 Python suite passes 112 tests; the Rust core passes
+  25 contract/oracle tests, and the CUDA-feature workspace passes formatting,
+  Clippy, release build, plus three safe-wrapper CPU-oracle tests;
+- against vLLM's exact `compute_logprobs + gather_logprobs(0)` path for the
+  same caller-selected BF16 IDs, ranks were exact and maximum logprob error was
+  `9.54e-7`; 1-128 row H20 speedup ratios were `2.77-3.78x`;
+- order-reversed Qwen2.5-0.5B top-k/top-p runs matched every sampled token,
+  rank, and raw logprob within `1.20e-6`. Baseline processes recorded zero
+  Loom launches and Loom processes recorded 1440 selected-token launches;
+- across both provider orders, top-k/top-p batch-latency ratios were
+  `1.044-1.125x` and TPOT ratios were `1.054-1.130x`. vLLM still owns masks,
+  penalties, top-k/top-p, RNG, and selection; Loom accelerates only the raw
+  sampled-token logprob/rank tail.
 
 See the [F32 report](results/h20-rms-norm-f32-smoke-20260721.json) and
 [low-precision report](results/h20-rms-norm-low-precision-20260721.json), plus
@@ -172,6 +193,11 @@ and order-reversed
 [baseline-first](results/h20-vllm-greedy-logprobs-baseline-first-20260722.json)
 and [Loom-first](results/h20-vllm-greedy-logprobs-loom-first-20260722.json)
 engine reports record the first qualified end-to-end acceleration.
+The [selected-token operator report](results/h20-selected-token-logprobs-20260722.json)
+and top-k/top-p order-reversed
+[baseline-first](results/h20-vllm-selected-logprobs-baseline-first-20260722.json)
+and [Loom-first](results/h20-vllm-selected-logprobs-loom-first-20260722.json)
+engine reports extend that result without moving sampling policy into Loom.
 
 ## Not Yet Proven
 
@@ -180,8 +206,8 @@ engine reports record the first qualified end-to-end acceleration.
   activation-quant boundary is material;
 - RoPE+paged-KV model-level TTFT/TPOT or throughput benefit beyond the current
   exact-token engine integration gate;
-- logits preprocessing, top-k/top-p/min-p, stochastic sampling, and general
-  top-k logprob integration;
+- Loom-owned logits preprocessing, top-k/top-p/min-p, stochastic sampling, and
+  general top-k logprob integration;
 - integration into SGLang or a Rust-native engine path;
 - larger production-model and serving-workload validation;
 - automated binary-wheel packaging;

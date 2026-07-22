@@ -63,13 +63,17 @@ Status: in progress.
   CUDA/C ABI, PyTorch, and narrow vLLM 0.24 integration complete; H20 named
   baseline and both real-engine provider orders show exact token/rank parity
   and material latency/TPOT benefit;
+- ~~general selected-token raw logprob and rank~~ — vLLM continues to own
+  penalties, top-k/top-p, RNG, and token selection; Rust/CUDA/PyTorch plus
+  order-reversed Qwen2.5 H20 gates show exact token/rank parity and material
+  operator and end-to-end benefit;
 - fused logits bias, masking, bad-word suppression, and history penalties;
 - top-k/top-p/min-p filtering, renormalization, and deterministic RNG sampling;
-- general selected-token and top-k logprobs.
+- top-k logprobs.
 
 Exit: fewer launches and temporary tensors with identical token results. The
-first exit gate is closed for pure greedy requests with `logprobs=0`; general
-sampling remains open.
+selected-logprob exit gates are closed for pure greedy and engine-owned general
+sampling requests with `logprobs=0`; owning the selection kernels remains open.
 
 ## K5: MoE Routing And Movement
 

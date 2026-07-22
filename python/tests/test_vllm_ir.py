@@ -13,6 +13,7 @@ from loom_kernels.vllm import (
     DEFAULT_PROVIDER,
     GREEDY_SAMPLE_LOGPROBS_OVERRIDE_KEY,
     ROPE_PAGED_KV_OVERRIDE_KEY,
+    SELECTED_TOKEN_LOGPROBS_OVERRIDE_KEY,
     SILU_OVERRIDE_ENV,
     SILU_OVERRIDE_KEY,
     configure_vllm_rope_paged_kv,
@@ -20,6 +21,7 @@ from loom_kernels.vllm import (
     register_vllm_ir,
     register_vllm_greedy_sample_logprobs,
     register_vllm_rope_paged_kv,
+    register_vllm_selected_token_logprobs,
     register_vllm_silu_and_mul,
     register_vllm_silu_and_mul_dynamic_fp8,
 )
@@ -68,6 +70,120 @@ def test_vllm_greedy_sample_logprobs_fast_path_matches_sampler_semantics():
         expected_ranks,
     )
     assert provider_metadata()["greedy_sample_logprobs_override"] is True
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_vllm_selected_token_fast_path_preserves_engine_selection(monkeypatch):
+    from vllm.v1.sample.sampler import Sampler
+
+    assert (
+        register_vllm_selected_token_logprobs()
+        == SELECTED_TOKEN_LOGPROBS_OVERRIDE_KEY
+    )
+    logits = torch.randn((5, 4096), device="cuda", dtype=torch.bfloat16)
+    sampled = torch.tensor([0, 17, 2048, 4095, 7], device="cuda")
+    metadata = SimpleNamespace(
+        all_greedy=False,
+        all_random=True,
+        max_num_logprobs=0,
+        logprob_token_ids=None,
+        top_k=torch.full((5,), 50, device="cuda", dtype=torch.int32),
+        top_p=torch.full((5,), 0.9, device="cuda"),
+        no_penalties=False,
+    )
+    sampler = Sampler()
+    observed = {}
+
+    def apply_processors(sampling_logits, received_metadata, predict_bonus_token):
+        observed["input_dtype"] = sampling_logits.dtype
+        observed["metadata"] = received_metadata
+        observed["predict_bonus_token"] = predict_bonus_token
+        sampling_logits.add_(1.0)
+        return sampling_logits
+
+    def sample(sampling_logits, received_metadata):
+        observed["sample_logits_dtype"] = sampling_logits.dtype
+        observed["sample_metadata"] = received_metadata
+        return sampled, None
+
+    monkeypatch.setattr(sampler, "apply_logits_processors", apply_processors)
+    monkeypatch.setattr(sampler, "sample", sample)
+    output = sampler.forward(logits, metadata, predict_bonus_token=True)
+    expected_logprobs = logits.float().log_softmax(-1).gather(
+        -1, sampled.unsqueeze(-1)
+    )
+    selected = logits.float().gather(-1, sampled.unsqueeze(-1))
+    expected_ranks = (logits.float() >= selected).sum(dim=-1)
+    torch.cuda.synchronize()
+
+    assert observed == {
+        "input_dtype": torch.float32,
+        "metadata": metadata,
+        "predict_bonus_token": True,
+        "sample_logits_dtype": torch.float32,
+        "sample_metadata": metadata,
+    }
+    assert torch.equal(output.sampled_token_ids[:, 0], sampled.to(torch.int32))
+    assert output.logprobs_tensors is not None
+    torch.testing.assert_close(
+        output.logprobs_tensors.logprobs,
+        expected_logprobs,
+        rtol=2.0e-5,
+        atol=2.0e-5,
+    )
+    assert torch.equal(
+        output.logprobs_tensors.selected_token_ranks, expected_ranks
+    )
+    assert provider_metadata()["selected_token_logprobs_override"] is True
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_vllm_selected_token_path_handles_processed_greedy_batches(monkeypatch):
+    from vllm.v1.sample.sampler import Sampler
+
+    from loom_kernels.torch_ops import (
+        greedy_sample_logprobs_launch_count,
+        reset_greedy_sample_logprobs_launch_count,
+        reset_selected_token_logprobs_launch_count,
+        selected_token_logprobs_launch_count,
+    )
+
+    register_vllm_selected_token_logprobs()
+    reset_greedy_sample_logprobs_launch_count()
+    reset_selected_token_logprobs_launch_count()
+    logits = torch.randn((3, 1024), device="cuda", dtype=torch.float16)
+    sampled = torch.tensor([7, 511, 1023], device="cuda")
+    metadata = SimpleNamespace(
+        all_greedy=True,
+        all_random=False,
+        max_num_logprobs=0,
+        logprob_token_ids=None,
+        no_penalties=False,
+        allowed_token_ids_mask=None,
+        bad_words_token_ids={},
+        logitsprocs=SimpleNamespace(non_argmax_invariant=[]),
+        thinking_budget_state_holder=None,
+        top_k=None,
+        top_p=None,
+    )
+    sampler = Sampler()
+    monkeypatch.setattr(
+        sampler,
+        "apply_logits_processors",
+        lambda sampling_logits, _metadata, _predict_bonus: sampling_logits,
+    )
+    monkeypatch.setattr(
+        sampler,
+        "sample",
+        lambda _sampling_logits, _metadata: (sampled, None),
+    )
+
+    output = sampler.forward(logits, metadata)
+    torch.cuda.synchronize()
+
+    assert torch.equal(output.sampled_token_ids[:, 0], sampled.to(torch.int32))
+    assert greedy_sample_logprobs_launch_count() == 0
+    assert selected_token_logprobs_launch_count() == 1
 
 
 def test_configures_vllm_rope_paged_kv_fusion():

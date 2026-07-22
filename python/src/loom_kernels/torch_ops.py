@@ -11,6 +11,7 @@ from ._native import (
     launch_greedy_sample_logprobs,
     launch_rms_norm_dynamic_fp8,
     launch_rope_paged_kv_write,
+    launch_selected_token_logprobs,
     launch_silu_and_mul,
     launch_silu_and_mul_dynamic_fp8,
 )
@@ -138,6 +139,21 @@ def supports_greedy_sample_logprobs(logits: torch.Tensor) -> bool:
         and logits.stride(1) == 1
         and logits.stride(0) >= logits.shape[1]
         and not logits.requires_grad
+    )
+
+
+def supports_selected_token_logprobs(
+    logits: torch.Tensor, token_ids: torch.Tensor
+) -> bool:
+    """Return whether one selected token per logits row can be normalized."""
+    return bool(
+        supports_greedy_sample_logprobs(logits)
+        and token_ids.device == logits.device
+        and token_ids.dtype == torch.int64
+        and token_ids.dim() == 1
+        and token_ids.shape[0] == logits.shape[0]
+        and token_ids.is_contiguous()
+        and not token_ids.requires_grad
     )
 
 
@@ -395,6 +411,25 @@ def _validate_greedy_sample_logits(
     )
 
 
+def _validate_selected_token_logprobs(
+    logits: torch.Tensor,
+    token_ids: torch.Tensor,
+) -> tuple[str, int, int, int]:
+    if not supports_selected_token_logprobs(logits, token_ids):
+        raise ValueError(
+            "Loom selected-token logprobs require finite, non-empty rank-2 "
+            "F32/FP16/BF16 CUDA logits with unit vocabulary stride and one "
+            "same-device contiguous int64 token ID per row; token IDs must "
+            "be in vocabulary range"
+        )
+    return (
+        _DTYPE_NAMES[logits.dtype],
+        logits.shape[0],
+        logits.shape[1],
+        logits.stride(0),
+    )
+
+
 def _validate_rope_paged_kv_write(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -620,6 +655,53 @@ if _EXTENSION_PATH is None:
         )
 
     @torch.library.custom_op(
+        "loom_kernels::selected_token_logprobs",
+        mutates_args=(),
+        device_types="cuda",
+    )
+    def _selected_token_logprobs(
+        logits: torch.Tensor,
+        token_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        dtype, rows, vocab_size, row_stride = _validate_selected_token_logprobs(
+            logits, token_ids
+        )
+        logprobs = torch.empty(rows, device=logits.device, dtype=torch.float32)
+        ranks = torch.empty(rows, device=logits.device, dtype=torch.int64)
+        device_index = logits.device.index
+        if device_index is None:
+            device_index = torch.cuda.current_device()
+        with torch.cuda.device(device_index):
+            stream = torch.cuda.current_stream(device_index)
+            launch_selected_token_logprobs(
+                dtype,
+                logits.data_ptr(),
+                token_ids.data_ptr(),
+                logprobs.data_ptr(),
+                ranks.data_ptr(),
+                rows,
+                vocab_size,
+                row_stride,
+                stream.cuda_stream,
+            )
+        return logprobs, ranks
+
+    @_selected_token_logprobs.register_fake
+    def _selected_token_logprobs_fake(
+        logits: torch.Tensor,
+        token_ids: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if logits.dim() != 2 or logits.shape[0] == 0 or logits.shape[1] == 0:
+            raise ValueError("selected-token logits must be non-empty rank-2")
+        if token_ids.dim() != 1 or token_ids.shape[0] != logits.shape[0]:
+            raise ValueError("selected token IDs must contain one value per row")
+        rows = logits.shape[0]
+        return (
+            torch.empty(rows, device=logits.device, dtype=torch.float32),
+            torch.empty(rows, device=logits.device, dtype=torch.int64),
+        )
+
+    @torch.library.custom_op(
         "loom_kernels::rope_paged_kv_write_",
         mutates_args={"query", "key", "key_cache", "value_cache"},
         device_types="cuda",
@@ -686,6 +768,7 @@ if _EXTENSION_PATH is None:
     _silu_and_mul_unchecked = _silu_and_mul
     _silu_and_mul_dynamic_fp8_unchecked = _silu_and_mul_dynamic_fp8
     _greedy_sample_logprobs_unchecked = _greedy_sample_logprobs
+    _selected_token_logprobs_unchecked = _selected_token_logprobs
     _rope_paged_kv_write_unchecked = _rope_paged_kv_write
 else:
     _add_rms_norm_mut = torch.ops.loom_kernels.add_rms_norm_mut.default
@@ -708,6 +791,10 @@ else:
         torch.ops.loom_kernels.greedy_sample_logprobs.default
     )
     _greedy_sample_logprobs_unchecked = _greedy_sample_logprobs
+    _selected_token_logprobs = (
+        torch.ops.loom_kernels.selected_token_logprobs.default
+    )
+    _selected_token_logprobs_unchecked = _selected_token_logprobs
     _rope_paged_kv_write = torch.ops.loom_kernels.rope_paged_kv_write_.default
     _rope_paged_kv_write_unchecked = (
         torch.ops.loom_kernels.rope_paged_kv_write_unchecked_.default
@@ -812,6 +899,15 @@ def greedy_sample_logprobs(
     return _greedy_sample_logprobs(logits)
 
 
+def selected_token_logprobs(
+    logits: torch.Tensor,
+    token_ids: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return normalized logprobs and ranks for one selected token per row."""
+    _validate_selected_token_logprobs(logits, token_ids)
+    return _selected_token_logprobs(logits, token_ids)
+
+
 def rope_paged_kv_write_(
     query: torch.Tensor,
     key: torch.Tensor,
@@ -883,6 +979,11 @@ def greedy_sample_logprobs_custom_op():
     return _greedy_sample_logprobs
 
 
+def selected_token_logprobs_custom_op():
+    """Expose selected-token normalization for dispatcher/FakeTensor checks."""
+    return _selected_token_logprobs
+
+
 def vllm_silu_and_mul_per_block_fp8_launch_count() -> int:
     """Return host submissions through vLLM's Loom activation-FP8 boundary.
 
@@ -936,6 +1037,20 @@ def reset_greedy_sample_logprobs_launch_count() -> None:
     torch.ops.loom_kernels.reset_greedy_sample_logprobs_launch_count()
 
 
+def selected_token_logprobs_launch_count() -> int:
+    """Return host submissions through selected-token normalization."""
+    if _EXTENSION_PATH is None:
+        raise RuntimeError("launch telemetry requires the C++ dispatcher bridge")
+    return int(torch.ops.loom_kernels.selected_token_logprobs_launch_count())
+
+
+def reset_selected_token_logprobs_launch_count() -> None:
+    """Reset host-side selected-token logprob launch telemetry."""
+    if _EXTENSION_PATH is None:
+        raise RuntimeError("launch telemetry requires the C++ dispatcher bridge")
+    torch.ops.loom_kernels.reset_selected_token_logprobs_launch_count()
+
+
 def adapter_backend() -> str:
     """Return the active dispatcher bridge implementation."""
     return _ADAPTER_BACKEND
@@ -958,6 +1073,7 @@ __all__ = [
     "rope_paged_kv_write_unchecked_custom_op",
     "reset_rope_paged_kv_write_launch_count",
     "reset_greedy_sample_logprobs_launch_count",
+    "reset_selected_token_logprobs_launch_count",
     "reset_vllm_silu_and_mul_per_block_fp8_launch_count",
     "silu_and_mul",
     "silu_and_mul_custom_op",
@@ -966,8 +1082,12 @@ __all__ = [
     "silu_and_mul_dynamic_fp8_out",
     "silu_and_mul_dynamic_fp8_unchecked_custom_op",
     "silu_and_mul_out",
+    "selected_token_logprobs",
+    "selected_token_logprobs_custom_op",
+    "selected_token_logprobs_launch_count",
     "supports_add_rms_norm",
     "supports_greedy_sample_logprobs",
+    "supports_selected_token_logprobs",
     "supports_rms_norm_dynamic_fp8",
     "supports_rope_paged_kv_write",
     "supports_silu_and_mul",

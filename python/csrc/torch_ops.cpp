@@ -18,6 +18,7 @@ namespace {
 std::atomic<int64_t> vllm_silu_and_mul_per_block_fp8_launches{0};
 std::atomic<int64_t> rope_paged_kv_write_launches{0};
 std::atomic<int64_t> greedy_sample_logprobs_launches{0};
+std::atomic<int64_t> selected_token_logprobs_launches{0};
 
 bool byte_ranges_overlap(const at::Tensor& left, const at::Tensor& right) {
   const auto left_begin = reinterpret_cast<uintptr_t>(left.data_ptr());
@@ -478,6 +479,88 @@ void reset_greedy_sample_logprobs_launch_count() {
   greedy_sample_logprobs_launches.store(0, std::memory_order_relaxed);
 }
 
+void check_selected_token_logprobs_shape(const at::Tensor& logits,
+                                         const at::Tensor& token_ids) {
+  check_greedy_sample_logprobs_shape(logits);
+  TORCH_CHECK(token_ids.dim() == 1 && token_ids.size(0) == logits.size(0),
+              "Loom selected token IDs must contain one value per logits row");
+}
+
+void check_selected_token_logprobs_contract(const at::Tensor& logits,
+                                            const at::Tensor& token_ids) {
+  check_greedy_sample_logprobs_contract(logits);
+  check_selected_token_logprobs_shape(logits, token_ids);
+  TORCH_CHECK(token_ids.device() == logits.device(),
+              "Loom selected token IDs and logits must share a CUDA device");
+  TORCH_CHECK(token_ids.scalar_type() == at::kLong,
+              "Loom selected token IDs must be int64");
+  TORCH_CHECK(token_ids.is_contiguous(),
+              "Loom selected token IDs must be contiguous");
+  TORCH_CHECK(!token_ids.requires_grad(),
+              "Loom selected token IDs must not require gradients");
+}
+
+std::tuple<at::Tensor, at::Tensor> launch_selected_token_logprobs(
+    const at::Tensor& logits, const at::Tensor& token_ids) {
+  const auto rows = static_cast<uint32_t>(logits.size(0));
+  const auto vocab_size = static_cast<uint32_t>(logits.size(1));
+  const auto row_stride = static_cast<uint64_t>(logits.stride(0));
+  at::Tensor logprobs =
+      at::empty({logits.size(0)}, logits.options().dtype(at::kFloat));
+  at::Tensor ranks =
+      at::empty({logits.size(0)}, logits.options().dtype(at::kLong));
+
+  const c10::cuda::CUDAGuard device_guard(logits.device());
+  const auto stream = at::cuda::getCurrentCUDAStream(logits.device().index());
+  int status = LOOM_CUDA_UNSUPPORTED;
+  if (logits.scalar_type() == at::kFloat) {
+    status = loom_cuda_selected_token_logprobs_f32(
+        logits.data_ptr<float>(), token_ids.data_ptr<int64_t>(),
+        logprobs.data_ptr<float>(), ranks.data_ptr<int64_t>(), rows, vocab_size,
+        row_stride, stream.stream());
+  } else if (logits.scalar_type() == at::kHalf) {
+    status = loom_cuda_selected_token_logprobs_f16(
+        reinterpret_cast<const uint16_t*>(logits.data_ptr<at::Half>()),
+        token_ids.data_ptr<int64_t>(), logprobs.data_ptr<float>(),
+        ranks.data_ptr<int64_t>(), rows, vocab_size, row_stride,
+        stream.stream());
+  } else if (logits.scalar_type() == at::kBFloat16) {
+    status = loom_cuda_selected_token_logprobs_bf16(
+        reinterpret_cast<const uint16_t*>(logits.data_ptr<at::BFloat16>()),
+        token_ids.data_ptr<int64_t>(), logprobs.data_ptr<float>(),
+        ranks.data_ptr<int64_t>(), rows, vocab_size, row_stride,
+        stream.stream());
+  }
+  TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
+              "Loom CUDA selected-token logprob launch failed: ",
+              loom_cuda_status_string(status), " (status ", status, ")");
+  selected_token_logprobs_launches.fetch_add(1, std::memory_order_relaxed);
+  return {logprobs, ranks};
+}
+
+std::tuple<at::Tensor, at::Tensor> selected_token_logprobs(
+    const at::Tensor& logits, const at::Tensor& token_ids) {
+  check_selected_token_logprobs_contract(logits, token_ids);
+  return launch_selected_token_logprobs(logits, token_ids);
+}
+
+std::tuple<at::Tensor, at::Tensor> selected_token_logprobs_meta(
+    const at::Tensor& logits, const at::Tensor& token_ids) {
+  check_selected_token_logprobs_shape(logits, token_ids);
+  return {
+      at::empty({logits.size(0)}, logits.options().dtype(at::kFloat)),
+      at::empty({logits.size(0)}, logits.options().dtype(at::kLong)),
+  };
+}
+
+int64_t selected_token_logprobs_launch_count() {
+  return selected_token_logprobs_launches.load(std::memory_order_relaxed);
+}
+
+void reset_selected_token_logprobs_launch_count() {
+  selected_token_logprobs_launches.store(0, std::memory_order_relaxed);
+}
+
 void check_rope_paged_kv_write_contract(
     const at::Tensor& query, const at::Tensor& key, const at::Tensor& value,
     const at::Tensor& positions, const at::Tensor& cos_sin_cache,
@@ -719,6 +802,13 @@ TORCH_LIBRARY(loom_kernels, library) {
   library.def("reset_greedy_sample_logprobs_launch_count() -> ()",
               &reset_greedy_sample_logprobs_launch_count);
   library.def(
+      "selected_token_logprobs(Tensor logits, Tensor token_ids) -> (Tensor "
+      "logprobs, Tensor ranks)");
+  library.def("selected_token_logprobs_launch_count() -> int",
+              &selected_token_logprobs_launch_count);
+  library.def("reset_selected_token_logprobs_launch_count() -> ()",
+              &reset_selected_token_logprobs_launch_count);
+  library.def(
       "rope_paged_kv_write_(Tensor(a!) query, Tensor(b!) key, Tensor value, "
       "Tensor positions, Tensor cos_sin_cache, Tensor(c!) key_cache, "
       "Tensor(d!) value_cache, Tensor slot_mapping, bool is_neox) -> ()");
@@ -743,6 +833,7 @@ TORCH_LIBRARY_IMPL(loom_kernels, CUDA, library) {
   library.impl("silu_and_mul_per_block_fp8",
                &vllm_silu_and_mul_per_block_fp8);
   library.impl("greedy_sample_logprobs", &greedy_sample_logprobs);
+  library.impl("selected_token_logprobs", &selected_token_logprobs);
   library.impl("rope_paged_kv_write_", &rope_paged_kv_write);
   library.impl("rope_paged_kv_write_unchecked_",
                &launch_rope_paged_kv_write);
@@ -750,4 +841,5 @@ TORCH_LIBRARY_IMPL(loom_kernels, CUDA, library) {
 
 TORCH_LIBRARY_IMPL(loom_kernels, Meta, library) {
   library.impl("greedy_sample_logprobs", &greedy_sample_logprobs_meta);
+  library.impl("selected_token_logprobs", &selected_token_logprobs_meta);
 }

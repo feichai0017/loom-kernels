@@ -38,14 +38,15 @@ CUDA_HOME=/usr/local/cuda-13.1 \
       </p>
 
       <h2>Direct PyTorch use</h2>
-      <pre><code>from loom_kernels import greedy_sample_logprobs, silu_and_mul_dynamic_fp8
+      <pre><code>from loom_kernels import greedy_sample_logprobs, selected_token_logprobs, silu_and_mul_dynamic_fp8
 
 fp8_output, block_scales = silu_and_mul_dynamic_fp8(
     gate_and_up_bf16,
     group_size=128,
 )
 
-token_ids, logprobs, ranks = greedy_sample_logprobs(logits)</code></pre>
+token_ids, logprobs, ranks = greedy_sample_logprobs(logits)
+logprobs, ranks = selected_token_logprobs(logits, sampled_ids_i64)</code></pre>
 
       <h2>vLLM Add + RMSNorm provider</h2>
       <pre><code>from vllm import LLM
@@ -113,6 +114,22 @@ engine = LLM(model="/path/to/model")</code></pre>
         unchanged. On the qualified
         Qwen2.5-0.5B H20 gate, both provider orders show an exact-output,
         order-stable latency and TPOT improvement.
+      </p>
+
+      <h2>vLLM general selected-token logprobs</h2>
+      <pre><code>from vllm import LLM
+from loom_kernels.vllm import register_vllm_selected_token_logprobs
+
+register_vllm_selected_token_logprobs()
+engine = LLM(model="/path/to/model")</code></pre>
+      <p>
+        vLLM 0.24 still owns masks, penalties, temperature, top-k/top-p, RNG,
+        and token selection. For BF16/FP16 raw <code>logprobs=0</code> requests,
+        Loom scans the preserved raw logits only after selection and returns
+        the selected token's logprob and tie-aware rank. Top-k logprob lists,
+        processed modes, and unsupported layouts fall back unchanged. The
+        order-reversed Qwen2.5 top-k/top-p H20 gate preserves every token and
+        rank while improving batch latency and TPOT.
       </p>
 
       <h2>Compatibility contract</h2>

@@ -1,4 +1,4 @@
-"""Run isolated real-engine A/B for Loom greedy sampled-token logprobs."""
+"""Run isolated real-engine A/B for Loom sampled-token logprobs."""
 
 from __future__ import annotations
 
@@ -54,6 +54,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.5)
     parser.add_argument("--seed", type=int, default=31)
     parser.add_argument(
+        "--sampling-mode",
+        choices=("greedy", "top-k-top-p"),
+        default="greedy",
+    )
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--top-k", type=int, default=50)
+    parser.add_argument("--top-p", type=float, default=0.9)
+    parser.add_argument(
         "--provider-order",
         choices=("baseline-first", "loom-first"),
         default="baseline-first",
@@ -73,6 +81,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("warmup and repeats must be positive")
     if not 0.0 < args.gpu_memory_utilization < 1.0:
         parser.error("gpu-memory-utilization must be between zero and one")
+    if args.temperature <= 0.0 or args.top_k <= 0 or not 0.0 < args.top_p <= 1.0:
+        parser.error("temperature/top-k must be positive and top-p must be in (0, 1]")
     if args.internal_provider is not None and (
         args.internal_result is None or args.internal_cache_root is None
     ):
@@ -149,16 +159,30 @@ def run_case(
     case: BenchmarkCase,
     warmup: int,
     repeats: int,
+    sampling_mode: str,
+    seed: int,
+    temperature: float,
+    top_k: int,
+    top_p: float,
 ) -> dict[str, Any]:
     import torch
 
     prompts = make_prompts(case)
-    sampling = sampling_type(
-        temperature=0.0,
-        max_tokens=case.output_len,
-        ignore_eos=True,
-        logprobs=0,
-    )
+    sampling_arguments: dict[str, Any] = {
+        "max_tokens": case.output_len,
+        "ignore_eos": True,
+        "logprobs": 0,
+    }
+    if sampling_mode == "greedy":
+        sampling_arguments["temperature"] = 0.0
+    else:
+        sampling_arguments.update(
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            seed=seed,
+        )
+    sampling = sampling_type(**sampling_arguments)
     for _ in range(warmup):
         engine.generate(prompts, sampling, use_tqdm=False)
 
@@ -233,20 +257,33 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         adapter_backend,
         greedy_sample_logprobs_launch_count,
         reset_greedy_sample_logprobs_launch_count,
+        reset_selected_token_logprobs_launch_count,
+        selected_token_logprobs_launch_count,
     )
     from loom_kernels.vllm import (
         provider_metadata,
         register_vllm_greedy_sample_logprobs,
+        register_vllm_selected_token_logprobs,
     )
 
     if adapter_backend() != "cpp-dispatch":
         raise RuntimeError("engine evidence requires the C++ dispatcher bridge")
     explicit_registration = None
     if provider == "loom":
-        explicit_registration = register_vllm_greedy_sample_logprobs()
+        registration = (
+            register_vllm_greedy_sample_logprobs
+            if args.sampling_mode == "greedy"
+            else register_vllm_selected_token_logprobs
+        )
+        explicit_registration = registration()
         if explicit_registration is None:
-            raise RuntimeError("Loom greedy sampling registration failed")
-    reset_greedy_sample_logprobs_launch_count()
+            raise RuntimeError("Loom sampled-token logprob registration failed")
+    if args.sampling_mode == "greedy":
+        reset_greedy_sample_logprobs_launch_count()
+        launch_count_fn = greedy_sample_logprobs_launch_count
+    else:
+        reset_selected_token_logprobs_launch_count()
+        launch_count_fn = selected_token_logprobs_launch_count
 
     model_path = Path(args.model).expanduser()
     model = str(model_path.resolve()) if model_path.exists() else args.model
@@ -261,17 +298,37 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         seed=args.seed,
         disable_log_stats=False,
     )
-    launches_after_engine_init = greedy_sample_logprobs_launch_count()
+    launches_after_engine_init = launch_count_fn()
     cases = [
-        run_case(engine, SamplingParams, case, args.warmup, args.repeats)
+        run_case(
+            engine,
+            SamplingParams,
+            case,
+            args.warmup,
+            args.repeats,
+            args.sampling_mode,
+            args.seed,
+            args.temperature,
+            args.top_k,
+            args.top_p,
+        )
         for case in args.cases
     ]
-    launch_count = greedy_sample_logprobs_launch_count()
+    launch_count = launch_count_fn()
     report = {
         "provider": provider,
         "model": model,
         "dtype": "bfloat16 logits observed by the sampler",
-        "sampling": "temperature=0, logprobs=0, ignore_eos=true",
+        "sampling": (
+            "temperature=0, logprobs=0, ignore_eos=true"
+            if args.sampling_mode == "greedy"
+            else (
+                f"temperature={args.temperature}, top_k={args.top_k}, "
+                f"top_p={args.top_p}, seed={args.seed}, logprobs=0, "
+                "ignore_eos=true"
+            )
+        ),
+        "sampling_mode": args.sampling_mode,
         "warmup": args.warmup,
         "repeats": args.repeats,
         "seed": args.seed,
@@ -319,6 +376,14 @@ def child_command(
         str(args.gpu_memory_utilization),
         "--seed",
         str(args.seed),
+        "--sampling-mode",
+        args.sampling_mode,
+        "--temperature",
+        str(args.temperature),
+        "--top-k",
+        str(args.top_k),
+        "--top-p",
+        str(args.top_p),
         "--internal-provider",
         provider,
         "--internal-result",
@@ -393,7 +458,7 @@ def run_controller(args: argparse.Namespace) -> dict[str, Any]:
     loom_launches = reports["loom"]["loom_path"]["host_launch_count"]
     accepted = outputs_match and baseline_launches == 0 and loom_launches > 0
     report = {
-        "benchmark": "vllm_engine_greedy_sample_logprobs_ab",
+        "benchmark": f"vllm_engine_{args.sampling_mode}_sample_logprobs_ab",
         "model": args.model,
         "provider_order": list(order),
         "acceptance": {
