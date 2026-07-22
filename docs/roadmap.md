@@ -29,7 +29,7 @@ an oracle-checked CUDA path without cloning the repository.
 ## K0.6: Engine-Owned Runtime Interop
 
 Status: in progress; the runtime foundation is included in the GitHub
-prerelease `v1.0.0alpha1`.
+prerelease `v1.0.0-alpha.1`.
 
 - ~~generic safe backend over owned or borrowed CUDA streams~~;
 - ~~sealed read/write device-memory traits shared by owned buffers and borrowed

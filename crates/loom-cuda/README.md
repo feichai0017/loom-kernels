@@ -25,8 +25,8 @@ CUDA_HOME=/usr/local/cuda LOOM_CUDA_ARCHS=90 \
 
 ## Framework-owned resources
 
-The `v1.0.0alpha1` repository API separates the unsafe framework boundary from
-safe checked dispatch:
+The `v1.0.0-alpha.1` repository API separates the unsafe framework boundary
+from safe checked dispatch:
 
 ```rust
 use loom_cuda::{

@@ -70,7 +70,7 @@ flowchart LR
 The backend either accepts the exact contract or declines it. Adapters do not
 silently copy, cast, reshape, or change sampling policy to force a Loom path.
 The current C++ PyTorch bridge calls the stable C ABI directly. The
-`v1.0.0alpha1` Rust runtime includes borrowed streams and tensor views so a
+`v1.0.0-alpha.1` Rust runtime includes borrowed streams and tensor views so a
 native adapter can enter the same checked Rust dispatch without taking
 ownership or copying data.
 

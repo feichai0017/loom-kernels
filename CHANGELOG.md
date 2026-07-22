@@ -8,10 +8,8 @@ spelling; Python source-adapter metadata uses the equivalent PEP 440 spelling.
 First public alpha of Loom Kernels as a Rust-first CUDA operator backend for
 LLM inference.
 
-GitHub tag and Release name: `v1.0.0alpha1`. Cargo packages use the valid
-Semantic Versioning spelling `1.0.0-alpha.1`; the compact GitHub spelling also
-keeps this release distinct from the repository's unrelated historical
-`v1.0.0-alpha.1` QuillCache release.
+GitHub tag and Release name: `v1.0.0-alpha.1`. Cargo packages use the matching
+Semantic Versioning spelling `1.0.0-alpha.1`.
 
 ### Included
 
