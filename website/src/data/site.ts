@@ -56,12 +56,18 @@ export const supportedOperators = [
     boundary: "Engine-owned sampling + one-pass normalization",
     status: "supported",
   },
+  {
+    name: "Min-P filtering",
+    dtypes: "F32 · FP16 · BF16",
+    boundary: "In-place row-max threshold; shape-gated in vLLM",
+    status: "supported",
+  },
 ];
 
 export const nextOperators = [
   {
     name: "Loom-owned sampling",
-    reason: "Fuse logits processing, top-k/top-p, and deterministic RNG where profiling pays.",
+    reason: "Build from shape-gated Min-P into top-k/top-p and deterministic RNG where profiling pays.",
   },
   {
     name: "MoE routing + movement",
@@ -69,7 +75,7 @@ export const nextOperators = [
   },
   {
     name: "Paged decode attention",
-    reason: "Integrate only against an engine-owned KV contract.",
+    reason: "Rust contract and oracle are fixed; next qualify CUDA against engine-owned paged KV.",
   },
 ];
 
@@ -115,5 +121,11 @@ export const evidence = [
     shape: "Qwen2.5 top-k/top-p · batches 1 / 8 / 32",
     result: "1.044–1.125×",
     detail: "vLLM-owned sampling; order-stable engine ratio",
+  },
+  {
+    operator: "Min-P filtering",
+    shape: "F32 · 151,936 vocab · 128 rows",
+    result: "1.885×",
+    detail: "0 tensor-sized temp; smaller batches route back to vLLM",
   },
 ];

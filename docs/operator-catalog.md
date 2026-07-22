@@ -64,8 +64,9 @@ valuable epilogues, and evidence around it.
 | repetition, presence, and frequency penalties | P0 | planned | sparse history-aware update |
 | greedy argmax+sampled-token raw logprob | P0 | supported | one-pass selection, normalization, gather, and tie-aware rank |
 | general selected-token raw logprob+rank | P0 | supported | engine-owned sampling followed by one-pass normalization and tie-aware rank |
+| in-place min-p filtering | P0 | supported | row-max threshold without probability or mask tensors; vLLM route is H20 shape-gated |
 | deterministic RNG sampling | P0 | planned | token selection without host round trips |
-| top-k, top-p, min-p, and renormalization | P0 | planned | fused candidate filtering and sampling |
+| top-k, top-p, and renormalization | P0 | planned | fused candidate filtering and sampling |
 | top-k logprobs | P0 | planned | avoid full-vocabulary probability tensors when multiple candidates are returned |
 | sharded-vocabulary top-k/logsumexp merge | P1 | planned | tensor-parallel token selection |
 | structured-output bitmask application | P1 | profile-gated | grammar mask plus logits processing |
@@ -84,7 +85,7 @@ valuable epilogues, and evidence around it.
 
 | Operator | Priority | State | Intended fusion boundary |
 | --- | --- | --- | --- |
-| paged MQA/GQA decode attention | P1 | planned | decode over engine-owned paged KV |
+| paged MQA/GQA decode attention | P1 | next | Rust contract and CPU oracle exist; CUDA and engine gates remain |
 | ragged prefill attention | P1 | vendor-backed | FlashAttention/FlashInfer selected by evidence |
 | split-KV state and numerically stable LSE merge | P1 | planned | long-context and distributed attention |
 | sliding-window, ALiBi, soft-cap, and causal variants | P1 | planned | standard attention contract options |
@@ -112,9 +113,9 @@ the boundary or an isolated implementation is measurably useful.
 
 ## Implementation Order
 
-1. Extend the proven engine-owned selected-token path with fused logits
-   preprocessing, top-k/top-p, and deterministic RNG sampling where profiling
-   shows additional value.
+1. Extend the shape-gated min-p and proven selected-token paths with fused
+   logits preprocessing, top-k/top-p, and deterministic RNG sampling where
+   profiling shows additional value.
 2. Optimize the real-engine RoPE+paged-KV boundary only where profiling shows
    TPOT materiality; keep its current parity result explicit.
 3. Add MoE routing/movement before attempting a full grouped-GEMM stack.

@@ -32,13 +32,21 @@
 - one-block-per-row F32/FP16/BF16 CUDA selected-token normalization and rank,
   preserving caller-owned sampling policy without a full-vocabulary F32
   logprob tensor;
+- in-place F32/FP16/BF16 Min-P contracts, CPU oracles, handwritten CUDA, C ABI,
+  PyTorch mutation schemas, and an opt-in vLLM 0.24 processor override that
+  cancels the softmax denominator instead of allocating probability and mask
+  tensors;
+- a base paged MQA/GQA decode-attention Rust contract and stable CPU oracle for
+  one query per request, logical NHD caches, block-table indirection, distinct
+  K/V widths, and pre-mutation metadata validation; no CUDA support is claimed;
 - a C++ PyTorch dispatcher bridge using the current CUDA stream;
 - a source-adapter Python wheel with explicit framework extras, project
   metadata, license/readme payloads, and a CI install/entry-point smoke gate;
 - a `loom_cuda` vLLM IR provider with native fallback and an opt-in vLLM
   `SiluAndMul` out-of-tree layer replacement, plus an opt-in activation-quant
   fusion-table replacement, RoPE+KV compiler-pass adapter, and pure-greedy
-  plus general selected-token sampled-logprob fast paths for vLLM 0.24;
+  general selected-token sampled-logprob fast paths, and a measured-shape
+  Min-P override for vLLM 0.24;
 - per-operator JSON correctness/latency benchmarks and named vLLM baselines.
 
 ## Validated
@@ -154,9 +162,9 @@
 - selected-token PyTorch tests cover arbitrary IDs/ranks, F32/FP16/BF16,
   Qwen's 151,936-token vocabulary, ties, padded rows, external streams,
   FakeTensor/schema validation, `torch.compile`, and CUDA Graph replay;
-- the current complete H20 Python suite passes 112 tests; the Rust core passes
-  25 contract/oracle tests, and the CUDA-feature workspace passes formatting,
-  Clippy, release build, plus three safe-wrapper CPU-oracle tests;
+- the current complete H20 Python suite passes 128 tests; the Rust core passes
+  30 contract/oracle tests, and the CUDA-feature workspace passes formatting,
+  Clippy, release build, plus four safe-wrapper CPU-oracle tests;
 - against vLLM's exact `compute_logprobs + gather_logprobs(0)` path for the
   same caller-selected BF16 IDs, ranks were exact and maximum logprob error was
   `9.54e-7`; 1-128 row H20 speedup ratios were `2.77-3.78x`;
@@ -167,6 +175,13 @@
   `1.044-1.125x` and TPOT ratios were `1.054-1.130x`. vLLM still owns masks,
   penalties, top-k/top-p, RNG, and selection; Loom accelerates only the raw
   sampled-token logprob/rank tail.
+- Min-P F32 masks and retained logits matched vLLM 0.24 exactly for 1, 8, 32,
+  and 128 rows over a 151,936-token vocabulary. Loom used no tensor-sized
+  temporary allocation versus `0.76-97.24 MB` for the composed baseline;
+- Min-P latency ratios were `0.714x`, `0.771x`, `1.104x`, and `1.885x` for
+  1, 8, 32, and 128 rows. The vLLM adapter therefore requires at least 32 rows
+  and a 65,536-token vocabulary, falling back below either threshold. A second
+  65,536-vocabulary sweep measured `1.35x` and `2.35x` at 32 and 128 rows;
 
 See the [F32 report](results/h20-rms-norm-f32-smoke-20260721.json) and
 [low-precision report](results/h20-rms-norm-low-precision-20260721.json), plus
@@ -198,6 +213,10 @@ and top-k/top-p order-reversed
 [baseline-first](results/h20-vllm-selected-logprobs-baseline-first-20260722.json)
 and [Loom-first](results/h20-vllm-selected-logprobs-loom-first-20260722.json)
 engine reports extend that result without moving sampling policy into Loom.
+The [Min-P operator report](results/h20-min-p-filter-20260722.json) records the
+exact-mask gate, memory reduction, small-batch regression, and crossover point;
+the [65,536-token sweep](results/h20-min-p-filter-vocab65536-20260722.json)
+records the lower vocabulary boundary behind the vLLM routing threshold.
 
 ## Not Yet Proven
 
@@ -206,8 +225,10 @@ engine reports extend that result without moving sampling policy into Loom.
   activation-quant boundary is material;
 - RoPE+paged-KV model-level TTFT/TPOT or throughput benefit beyond the current
   exact-token engine integration gate;
-- Loom-owned logits preprocessing, top-k/top-p/min-p, stochastic sampling, and
+- Min-P real-model invocation and end-to-end serving benefit;
+- Loom-owned logits preprocessing, top-k/top-p, stochastic sampling, and
   general top-k logprob integration;
+- paged decode-attention CUDA, framework, engine, and H20 performance gates;
 - integration into SGLang or a Rust-native engine path;
 - larger production-model and serving-workload validation;
 - automated binary-wheel packaging;

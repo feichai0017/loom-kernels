@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-07-22T05:17:47.628535+00:00",
+  "device": "NVIDIA H20",
+  "compute_capability": [
+    9,
+    0
+  ],
+  "torch_version": "2.11.0+cu130",
+  "vllm_version": "0.24.0",
+  "adapter_backend": "cpp-dispatch",
+  "baseline": "vLLM 0.24 MinPLogitsProcessor.apply",
+  "candidate": "Loom min_p_filter_",
+  "dtype": "f32 (vLLM sampling processor contract)",
+  "vocab_size": 151936,
+  "row_stride": 151936,
+  "warmup": 20,
+  "iterations": 100,
+  "repeats": 7,
+  "timing_method": "CUDA events over independent preallocated logits; input creation and reset copies excluded; provider order alternated by repeat",
+  "vllm_fast_path_gate": {
+    "minimum_rows": 32,
+    "minimum_vocab_size": 65536,
+    "smaller_shapes": "fall back to vLLM 0.24"
+  },
+  "acceptance": {
+    "passed": true,
+    "mask": "exact",
+    "retained_logits": "exact"
+  },
+  "results": [
+    {
+      "rows": 1,
+      "baseline_us": 61.63519859313965,
+      "loom_us": 86.22879981994629,
+      "speedup": 0.7147866921705932,
+      "latency_reduction_percent": -39.9018771548893,
+      "baseline_samples_us": [
+        61.95328235626221,
+        61.63519859313965,
+        61.56928062438965,
+        61.74079895019531,
+        61.503682136535645,
+        61.55200004577637,
+        61.772799491882324
+      ],
+      "loom_samples_us": [
+        86.33600234985352,
+        86.22879981994629,
+        86.2723159790039,
+        86.0752010345459,
+        86.21503829956055,
+        86.2332820892334,
+        86.18016242980957
+      ],
+      "baseline_p90_us": 61.95328235626221,
+      "loom_p90_us": 86.33600234985352,
+      "baseline_peak_temporary_bytes": 760320,
+      "loom_peak_temporary_bytes": 0,
+      "filtered_fraction": 0.948899507522583
+    },
+    {
+      "rows": 8,
+      "baseline_us": 69.61472034454346,
+      "loom_us": 90.38240432739258,
+      "speedup": 0.7702242583896944,
+      "latency_reduction_percent": -29.832316900885083,
+      "baseline_samples_us": [
+        69.83456134796143,
+        69.56799983978271,
+        69.5747184753418,
+        69.49888229370117,
+        69.80063915252686,
+        69.61472034454346,
+        69.69600200653076
+      ],
+      "loom_samples_us": [
+        90.43968200683594,
+        90.41760444641113,
+        90.29376029968262,
+        90.38240432739258,
+        90.34560203552246,
+        90.37983894348145,
+        90.42816162109375
+      ],
+      "baseline_p90_us": 69.83456134796143,
+      "loom_p90_us": 90.43968200683594,
+      "baseline_peak_temporary_bytes": 6077952,
+      "loom_peak_temporary_bytes": 0,
+      "filtered_fraction": 0.9852157831192017
+    },
+    {
+      "rows": 32,
+      "baseline_us": 102.65567779541016,
+      "loom_us": 92.95104026794434,
+      "speedup": 1.1044059055120938,
+      "latency_reduction_percent": 9.453580879186134,
+      "baseline_samples_us": [
+        102.5875186920166,
+        102.6966381072998,
+        102.73504257202148,
+        102.65567779541016,
+        102.58560180664062,
+        102.59360313415527,
+        102.70048141479492
+      ],
+      "loom_samples_us": [
+        93.04800033569336,
+        92.95104026794434,
+        92.93279647827148,
+        92.93408393859863,
+        93.00095558166504,
+        92.99039840698242,
+        92.89567947387695
+      ],
+      "baseline_p90_us": 102.73504257202148,
+      "loom_p90_us": 93.04800033569336,
+      "baseline_peak_temporary_bytes": 24310272,
+      "loom_peak_temporary_bytes": 0,
+      "filtered_fraction": 0.9947308897972107
+    },
+    {
+      "rows": 128,
+      "baseline_us": 283.2156753540039,
+      "loom_us": 150.29279708862305,
+      "speedup": 1.8844261391116457,
+      "latency_reduction_percent": 46.93344678017367,
+      "baseline_samples_us": [
+        283.08799743652344,
+        283.2374382019043,
+        283.23680877685547,
+        283.20512771606445,
+        283.2156753540039,
+        283.12511444091797,
+        283.22240829467773
+      ],
+      "loom_samples_us": [
+        150.19359588623047,
+        150.29279708862305,
+        150.29120445251465,
+        150.4697608947754,
+        150.4700756072998,
+        150.29536247253418,
+        150.20352363586426
+      ],
+      "baseline_p90_us": 283.2374382019043,
+      "loom_p90_us": 150.4700756072998,
+      "baseline_peak_temporary_bytes": 97239552,
+      "loom_peak_temporary_bytes": 0,
+      "filtered_fraction": 0.9947389364242554
+    }
+  ]
+}

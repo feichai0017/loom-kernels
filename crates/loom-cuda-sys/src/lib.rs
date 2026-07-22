@@ -225,6 +225,33 @@ unsafe extern "C" {
         stream: *mut c_void,
     ) -> c_int;
 
+    pub fn loom_cuda_min_p_filter_f32(
+        logits: *mut f32,
+        min_p: *const f32,
+        rows: u32,
+        vocab_size: u32,
+        row_stride: u64,
+        stream: *mut c_void,
+    ) -> c_int;
+
+    pub fn loom_cuda_min_p_filter_f16(
+        logits: *mut u16,
+        min_p: *const f32,
+        rows: u32,
+        vocab_size: u32,
+        row_stride: u64,
+        stream: *mut c_void,
+    ) -> c_int;
+
+    pub fn loom_cuda_min_p_filter_bf16(
+        logits: *mut u16,
+        min_p: *const f32,
+        rows: u32,
+        vocab_size: u32,
+        row_stride: u64,
+        stream: *mut c_void,
+    ) -> c_int;
+
     pub fn loom_cuda_rope_paged_kv_write_f32(
         query: *mut f32,
         key: *mut f32,

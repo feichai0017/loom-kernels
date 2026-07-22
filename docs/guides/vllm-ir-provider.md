@@ -401,6 +401,26 @@ batch-latency plus `1.054-1.130x` TPOT ratios. See the
 [baseline-first engine report](../results/h20-vllm-selected-logprobs-baseline-first-20260722.json),
 and [Loom-first engine report](../results/h20-vllm-selected-logprobs-loom-first-20260722.json).
 
+## Opt-In Min-P Filtering
+
+```bash
+LOOM_KERNELS_ENABLE_MIN_P=1 python your_service.py
+```
+
+vLLM 0.24 promotes sampling logits to F32 before its processors. Loom replaces
+the allocating `softmax + amax + compare + masked_fill` sequence with the
+equivalent in-place threshold `logit < row_max + log(min_p)`. The adapter uses
+Loom only for at least 32 rows and a vocabulary of at least 65,536 tokens. It
+calls the original vLLM processor for smaller shapes because H20 evidence shows
+that the current one-block-per-row kernel is slower there.
+
+The [Qwen-vocabulary report](../results/h20-min-p-filter-20260722.json) records
+exact masks, retained logits, temporary memory, all raw samples, and the row
+crossover. The
+[65,536-token boundary report](../results/h20-min-p-filter-vocab65536-20260722.json)
+independently validates the lower vocabulary gate. The override is opt-in and
+has not yet completed a real-model end-to-end gate.
+
 The compatible arithmetic and schema follow vLLM 0.24's
 [fused CUDA implementation](https://github.com/vllm-project/vllm/blob/v0.24.0/csrc/libtorch_stable/quantization/fused_kernels/fused_silu_mul_block_quant.cu)
 and its documented
@@ -419,13 +439,14 @@ dispatcher bridge follows PyTorch's
 - one selectable IR provider (`fused_add_rms_norm`), one opt-in out-of-tree
   layer replacement (`SiluAndMul`), and one vLLM-version-specific
   activation-quant fusion-table replacement, plus a vLLM 0.24-specific
-  RoPE+native-KV compiler-pass adapter and greedy/general selected-token
-  sampled-logprob sampler overrides;
+  RoPE+native-KV compiler-pass adapter, greedy/general selected-token
+  sampled-logprob sampler overrides, and a shape-gated Min-P override;
 - the activation-quant provider requires a graph-visible quantization boundary;
   it does not intercept vLLM's fused BF16-input FlashInfer/DeepGEMM path;
 - the isolated operator is faster on H20 and real-model invocation is proven,
   but no model-level speedup has been established for either FP8 activation
   fusion or RoPE+paged-KV;
-- vLLM-owned penalties, masks, top-k/top-p/min-p, and stochastic sampling can
-  feed the selected-token path, but Loom does not accelerate those selection
-  stages yet; top-k logprob lists and non-raw modes still fall back.
+- vLLM-owned penalties, masks, top-k/top-p, and stochastic sampling can feed
+  the selected-token path, but Loom does not accelerate those stages yet;
+  Min-P is the first separately qualified processor, while top-k logprob lists
+  and non-raw modes still fall back.

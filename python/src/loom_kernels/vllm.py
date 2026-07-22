@@ -18,6 +18,10 @@ ACT_QUANT_OVERRIDE_ENV = "LOOM_KERNELS_ENABLE_SILU_AND_MUL_FP8"
 ROPE_PAGED_KV_OVERRIDE_KEY = "rope_paged_kv"
 GREEDY_SAMPLE_LOGPROBS_OVERRIDE_KEY = "greedy_sample_logprobs"
 SELECTED_TOKEN_LOGPROBS_OVERRIDE_KEY = "selected_token_logprobs"
+MIN_P_OVERRIDE_KEY = "min_p_filter"
+MIN_P_OVERRIDE_ENV = "LOOM_KERNELS_ENABLE_MIN_P"
+MIN_P_FAST_PATH_MIN_ROWS = 32
+MIN_P_FAST_PATH_MIN_VOCAB_SIZE = 65536
 _SILU_OVERRIDE_CLASS: type | None = None
 _ACT_QUANT_OVERRIDE_REGISTERED = False
 _ROPE_PAGED_KV_REGISTERED = False
@@ -31,6 +35,8 @@ _SELECTED_TOKEN_LOGPROBS_REGISTERED = False
 _SELECTED_TOKEN_LOGPROBS_ORIGINAL_FORWARD: Any | None = None
 _SELECTED_TOKEN_LOGPROBS_FIRST_CONTRACT: dict[str, Any] | None = None
 _SELECTED_TOKEN_LOGPROBS_FIRST_REJECTION: dict[str, Any] | None = None
+_MIN_P_REGISTERED = False
+_MIN_P_ORIGINAL_APPLY: Any | None = None
 
 
 def _env_enabled(name: str) -> bool:
@@ -48,6 +54,10 @@ def _silu_override_requested() -> bool:
 
 def _act_quant_override_requested() -> bool:
     return _env_enabled(ACT_QUANT_OVERRIDE_ENV)
+
+
+def _min_p_override_requested() -> bool:
+    return _env_enabled(MIN_P_OVERRIDE_ENV)
 
 
 def register_vllm_silu_and_mul() -> str | None:
@@ -600,6 +610,52 @@ def register_vllm_selected_token_logprobs() -> str | None:
     return SELECTED_TOKEN_LOGPROBS_OVERRIDE_KEY
 
 
+def register_vllm_min_p() -> str | None:
+    """Replace vLLM 0.24's allocating min-p path with Loom's in-place kernel."""
+    global _MIN_P_ORIGINAL_APPLY
+    global _MIN_P_REGISTERED
+    if _MIN_P_REGISTERED:
+        return MIN_P_OVERRIDE_KEY
+    if not native_available():
+        return None
+
+    from .torch_ops import (
+        _min_p_filter_unchecked,
+        adapter_backend,
+        supports_min_p_filter,
+    )
+
+    if adapter_backend() != "cpp-dispatch":
+        return None
+
+    from importlib.metadata import version
+
+    if not version("vllm").startswith("0.24."):
+        return None
+
+    from vllm.v1.sample.logits_processor.builtin import MinPLogitsProcessor
+
+    original_apply = MinPLogitsProcessor.apply
+
+    def apply(self, logits: torch.Tensor) -> torch.Tensor:
+        if not self.min_p_count:
+            return logits
+        if (
+            not supports_min_p_filter(logits, self.min_p)
+            or logits.shape[0] < MIN_P_FAST_PATH_MIN_ROWS
+            or logits.shape[1] < MIN_P_FAST_PATH_MIN_VOCAB_SIZE
+        ):
+            return original_apply(self, logits)
+        _min_p_filter_unchecked(logits, self.min_p)
+        return logits
+
+    apply.__module__ = __name__
+    _MIN_P_ORIGINAL_APPLY = original_apply
+    MinPLogitsProcessor.apply = apply
+    _MIN_P_REGISTERED = True
+    return MIN_P_OVERRIDE_KEY
+
+
 def register_vllm_ir(provider: str = DEFAULT_PROVIDER) -> str:
     """Register Loom as an in-place fused_add_rms_norm IR provider."""
     from vllm import ir
@@ -615,6 +671,8 @@ def register_vllm_ir(provider: str = DEFAULT_PROVIDER) -> str:
         register_vllm_silu_and_mul()
     if _act_quant_override_requested():
         register_vllm_silu_and_mul_dynamic_fp8()
+    if _min_p_override_requested():
+        register_vllm_min_p()
 
     operation = ir.ops.fused_add_rms_norm
     implementations = getattr(operation, "impls", {})
@@ -668,6 +726,10 @@ def provider_metadata() -> dict[str, Any]:
         "silu_and_mul_override": _SILU_OVERRIDE_CLASS is not None,
         "silu_and_mul_fp8_override_requested": _act_quant_override_requested(),
         "silu_and_mul_fp8_override": _ACT_QUANT_OVERRIDE_REGISTERED,
+        "min_p_override_requested": _min_p_override_requested(),
+        "min_p_override": _MIN_P_REGISTERED,
+        "min_p_fast_path_min_rows": MIN_P_FAST_PATH_MIN_ROWS,
+        "min_p_fast_path_min_vocab_size": MIN_P_FAST_PATH_MIN_VOCAB_SIZE,
         "rope_paged_kv_override": _ROPE_PAGED_KV_REGISTERED,
         "rope_paged_kv_first_contract": _ROPE_PAGED_KV_FIRST_CONTRACT,
         "greedy_sample_logprobs_override": _GREEDY_SAMPLE_LOGPROBS_REGISTERED,
@@ -692,6 +754,10 @@ __all__ = [
     "ACT_QUANT_OVERRIDE_KEY",
     "DEFAULT_PROVIDER",
     "GREEDY_SAMPLE_LOGPROBS_OVERRIDE_KEY",
+    "MIN_P_FAST_PATH_MIN_ROWS",
+    "MIN_P_FAST_PATH_MIN_VOCAB_SIZE",
+    "MIN_P_OVERRIDE_ENV",
+    "MIN_P_OVERRIDE_KEY",
     "ROPE_PAGED_KV_OVERRIDE_KEY",
     "SELECTED_TOKEN_LOGPROBS_OVERRIDE_KEY",
     "SILU_OVERRIDE_ENV",
@@ -699,6 +765,7 @@ __all__ = [
     "provider_metadata",
     "configure_vllm_rope_paged_kv",
     "register_vllm_ir",
+    "register_vllm_min_p",
     "register_vllm_greedy_sample_logprobs",
     "register_vllm_rope_paged_kv",
     "register_vllm_selected_token_logprobs",

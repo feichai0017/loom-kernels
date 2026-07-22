@@ -1,0 +1,93 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-07-22T05:18:55.752322+00:00",
+  "device": "NVIDIA H20",
+  "compute_capability": [
+    9,
+    0
+  ],
+  "torch_version": "2.11.0+cu130",
+  "vllm_version": "0.24.0",
+  "adapter_backend": "cpp-dispatch",
+  "baseline": "vLLM 0.24 MinPLogitsProcessor.apply",
+  "candidate": "Loom min_p_filter_",
+  "dtype": "f32 (vLLM sampling processor contract)",
+  "vocab_size": 65536,
+  "row_stride": 65536,
+  "warmup": 20,
+  "iterations": 100,
+  "repeats": 7,
+  "timing_method": "CUDA events over independent preallocated logits; input creation and reset copies excluded; provider order alternated by repeat",
+  "vllm_fast_path_gate": {
+    "minimum_rows": 32,
+    "minimum_vocab_size": 65536,
+    "smaller_shapes": "fall back to vLLM 0.24"
+  },
+  "acceptance": {
+    "passed": true,
+    "mask": "exact",
+    "retained_logits": "exact"
+  },
+  "results": [
+    {
+      "rows": 32,
+      "baseline_us": 53.22847843170166,
+      "loom_us": 39.567039012908936,
+      "speedup": 1.3452732314474078,
+      "latency_reduction_percent": 25.66565834926494,
+      "baseline_samples_us": [
+        53.68959903717041,
+        53.267202377319336,
+        53.23488235473633,
+        53.18751811981201,
+        53.1276798248291,
+        53.22847843170166,
+        53.07648181915283
+      ],
+      "loom_samples_us": [
+        39.580159187316895,
+        39.512319564819336,
+        39.47839975357056,
+        39.638400077819824,
+        39.58816051483154,
+        39.52831983566284,
+        39.567039012908936
+      ],
+      "baseline_p90_us": 53.68959903717041,
+      "loom_p90_us": 39.638400077819824,
+      "baseline_peak_temporary_bytes": 10486272,
+      "loom_peak_temporary_bytes": 0,
+      "filtered_fraction": 0.9940605163574219
+    },
+    {
+      "rows": 128,
+      "baseline_us": 125.47455787658691,
+      "loom_us": 53.471360206604004,
+      "speedup": 2.3465750149570748,
+      "latency_reduction_percent": 57.38469924779742,
+      "baseline_samples_us": [
+        125.39135932922363,
+        125.58048248291016,
+        125.45023918151855,
+        125.47455787658691,
+        126.0159969329834,
+        125.50399780273438,
+        125.3548812866211
+      ],
+      "loom_samples_us": [
+        53.84255886077881,
+        53.38335990905762,
+        53.02559852600098,
+        53.39456081390381,
+        53.471360206604004,
+        54.19680118560791,
+        54.118080139160156
+      ],
+      "baseline_p90_us": 126.0159969329834,
+      "loom_p90_us": 54.19680118560791,
+      "baseline_peak_temporary_bytes": 41943552,
+      "loom_peak_temporary_bytes": 0,
+      "filtered_fraction": 0.9930819272994995
+    }
+  ]
+}

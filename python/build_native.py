@@ -70,6 +70,7 @@ def main() -> None:
             str(repository / "cuda" / "src" / "silu_and_mul.cu"),
             str(repository / "cuda" / "src" / "silu_and_mul_quant.cu"),
             str(repository / "cuda" / "src" / "greedy_sample.cu"),
+            str(repository / "cuda" / "src" / "min_p.cu"),
             str(repository / "cuda" / "src" / "rope_paged_kv.cu"),
             "-o",
             str(output),

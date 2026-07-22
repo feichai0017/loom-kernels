@@ -12,6 +12,8 @@ from loom_kernels.vllm import (
     ACT_QUANT_OVERRIDE_KEY,
     DEFAULT_PROVIDER,
     GREEDY_SAMPLE_LOGPROBS_OVERRIDE_KEY,
+    MIN_P_OVERRIDE_ENV,
+    MIN_P_OVERRIDE_KEY,
     ROPE_PAGED_KV_OVERRIDE_KEY,
     SELECTED_TOKEN_LOGPROBS_OVERRIDE_KEY,
     SILU_OVERRIDE_ENV,
@@ -19,6 +21,7 @@ from loom_kernels.vllm import (
     configure_vllm_rope_paged_kv,
     provider_metadata,
     register_vllm_ir,
+    register_vllm_min_p,
     register_vllm_greedy_sample_logprobs,
     register_vllm_rope_paged_kv,
     register_vllm_selected_token_logprobs,
@@ -215,6 +218,74 @@ def test_registers_inplace_fused_add_rms_norm_provider():
     assert DEFAULT_PROVIDER in ir.ops.fused_add_rms_norm.impls
     implementation = ir.ops.fused_add_rms_norm.impls[DEFAULT_PROVIDER]
     assert implementation.inplace is True
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_vllm_min_p_processor_uses_loom_without_probability_tensor():
+    from vllm.v1.sample.logits_processor.builtin import MinPLogitsProcessor
+
+    from loom_kernels.torch_ops import (
+        min_p_filter_launch_count,
+        reset_min_p_filter_launch_count,
+    )
+
+    assert register_vllm_min_p() == MIN_P_OVERRIDE_KEY
+    reset_min_p_filter_launch_count()
+    processor = object.__new__(MinPLogitsProcessor)
+    processor.min_p_count = 31
+    processor.min_p = torch.linspace(0.0, 0.8, 32, device="cuda").unsqueeze(1)
+    logits = torch.randn((32, 151936), device="cuda", dtype=torch.float32)
+    probabilities = torch.softmax(logits, dim=-1)
+    expected = logits.clone().masked_fill_(
+        probabilities
+        < probabilities.amax(dim=-1, keepdim=True) * processor.min_p,
+        -float("inf"),
+    )
+
+    returned = processor.apply(logits)
+    torch.cuda.synchronize()
+
+    assert returned is logits
+    assert torch.equal(torch.isneginf(logits), torch.isneginf(expected))
+    assert min_p_filter_launch_count() == 1
+    assert provider_metadata()["min_p_override"] is True
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_vllm_min_p_processor_falls_back_below_measured_fast_path():
+    from vllm.v1.sample.logits_processor.builtin import MinPLogitsProcessor
+
+    from loom_kernels.torch_ops import (
+        min_p_filter_launch_count,
+        reset_min_p_filter_launch_count,
+    )
+
+    assert register_vllm_min_p() == MIN_P_OVERRIDE_KEY
+    reset_min_p_filter_launch_count()
+    processor = object.__new__(MinPLogitsProcessor)
+    processor.min_p_count = 2
+    processor.min_p = torch.tensor([[0.0], [0.2], [0.8]], device="cuda")
+    logits = torch.randn((3, 4096), device="cuda", dtype=torch.float32)
+    probabilities = torch.softmax(logits, dim=-1)
+    expected = logits.clone().masked_fill_(
+        probabilities
+        < probabilities.amax(dim=-1, keepdim=True) * processor.min_p,
+        -float("inf"),
+    )
+
+    returned = processor.apply(logits)
+    torch.cuda.synchronize()
+
+    assert returned is logits
+    assert torch.equal(logits, expected)
+    assert min_p_filter_launch_count() == 0
+
+
+def test_min_p_override_metadata_tracks_opt_in(monkeypatch):
+    monkeypatch.delenv(MIN_P_OVERRIDE_ENV, raising=False)
+    assert provider_metadata()["min_p_override_requested"] is False
+    monkeypatch.setenv(MIN_P_OVERRIDE_ENV, "yes")
+    assert provider_metadata()["min_p_override_requested"] is True
 
 
 def test_registers_vllm_silu_and_mul_override():

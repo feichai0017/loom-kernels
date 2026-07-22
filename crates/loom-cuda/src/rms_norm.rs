@@ -358,6 +358,17 @@ impl Backend for CudaBackend {
             OperatorSpec::SelectedTokenLogprobs(_) => Support::Unsupported(
                 "CUDA selected-token logprobs support F32, FP16, and BF16 logits",
             ),
+            OperatorSpec::MinPFilter(spec)
+                if matches!(spec.dtype(), DType::F32 | DType::F16 | DType::Bf16) =>
+            {
+                Support::Supported
+            }
+            OperatorSpec::MinPFilter(_) => {
+                Support::Unsupported("CUDA min-p filtering supports F32, FP16, and BF16 logits")
+            }
+            OperatorSpec::PagedDecodeAttention(_) => Support::Unsupported(
+                "CUDA paged decode attention is not implemented yet; only the Rust contract and CPU oracle are available",
+            ),
             OperatorSpec::RotaryEmbedding(_) => Support::Unsupported(
                 "standalone CUDA RoPE is not exposed yet; use the fused RoPE+paged-KV contract",
             ),

@@ -2,6 +2,8 @@
 
 - [Operator library design](design/operator-library.md): architecture and
   admission gates.
+- [Paged decode attention contract](design/paged-decode-attention.md): the
+  engine-owned KV boundary, base semantics, exclusions, and qualification plan.
 - [LLM inference operator catalog](operator-catalog.md): complete intended
   common-operator surface, scope, priority, and current state.
 - [Roadmap](roadmap.md): prioritized operator sequence and exit criteria.
@@ -35,6 +37,10 @@
   reverse-order confirmation of the same correctness and performance result.
 - [H20 selected-token logprob operator report](results/h20-selected-token-logprobs-20260722.json):
   arbitrary selected ranks, exact vLLM rank parity, and 1-128 row latency.
+- [H20 min-p filter report](results/h20-min-p-filter-20260722.json): exact F32
+  masks, temporary-memory removal, crossover point, and vLLM routing decision.
+- [H20 min-p 65,536-vocabulary boundary report](results/h20-min-p-filter-vocab65536-20260722.json):
+  direct evidence for the lower vocabulary gate at 32 and 128 rows.
 - [H20 top-k/top-p selected-logprob engine report, baseline first](results/h20-vllm-selected-logprobs-baseline-first-20260722.json):
   vLLM-owned sampling with exact tokens/ranks and end-to-end latency evidence.
 - [H20 top-k/top-p selected-logprob engine report, Loom first](results/h20-vllm-selected-logprobs-loom-first-20260722.json):

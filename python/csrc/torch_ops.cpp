@@ -19,6 +19,7 @@ std::atomic<int64_t> vllm_silu_and_mul_per_block_fp8_launches{0};
 std::atomic<int64_t> rope_paged_kv_write_launches{0};
 std::atomic<int64_t> greedy_sample_logprobs_launches{0};
 std::atomic<int64_t> selected_token_logprobs_launches{0};
+std::atomic<int64_t> min_p_filter_launches{0};
 
 bool byte_ranges_overlap(const at::Tensor& left, const at::Tensor& right) {
   const auto left_begin = reinterpret_cast<uintptr_t>(left.data_ptr());
@@ -561,6 +562,81 @@ void reset_selected_token_logprobs_launch_count() {
   selected_token_logprobs_launches.store(0, std::memory_order_relaxed);
 }
 
+void check_min_p_filter_shape(const at::Tensor& logits,
+                              const at::Tensor& min_p) {
+  TORCH_CHECK(logits.dim() == 2 && logits.size(0) > 0 && logits.size(1) > 0,
+              "Loom min-p logits must be non-empty rank-2");
+  TORCH_CHECK(logits.size(0) <= std::numeric_limits<uint32_t>::max() &&
+                  logits.size(1) <= std::numeric_limits<uint32_t>::max(),
+              "Loom min-p shape exceeds the CUDA ABI");
+  TORCH_CHECK((min_p.dim() == 1 && min_p.size(0) == logits.size(0)) ||
+                  (min_p.dim() == 2 && min_p.size(0) == logits.size(0) &&
+                   min_p.size(1) == 1),
+              "Loom min-p probabilities must have shape [rows] or [rows, 1]");
+}
+
+void check_min_p_filter_contract(const at::Tensor& logits,
+                                 const at::Tensor& min_p) {
+  check_min_p_filter_shape(logits, min_p);
+  TORCH_CHECK(logits.is_cuda(), "Loom min-p logits must be CUDA");
+  TORCH_CHECK(min_p.device() == logits.device(),
+              "Loom min-p probabilities and logits must share a CUDA device");
+  TORCH_CHECK(logits.scalar_type() == at::kFloat ||
+                  logits.scalar_type() == at::kHalf ||
+                  logits.scalar_type() == at::kBFloat16,
+              "Loom min-p supports F32, FP16, and BF16 logits");
+  TORCH_CHECK(min_p.scalar_type() == at::kFloat,
+              "Loom min-p probabilities must use F32");
+  TORCH_CHECK(logits.stride(1) == 1 && logits.stride(0) >= logits.size(1),
+              "Loom min-p logits require unit vocabulary stride and "
+              "non-overlapping positive row stride");
+  TORCH_CHECK(min_p.is_contiguous(),
+              "Loom min-p probabilities must be contiguous");
+  TORCH_CHECK(!logits.requires_grad() && !min_p.requires_grad(),
+              "Loom min-p filtering is an inference-only operator");
+  TORCH_CHECK(!byte_ranges_overlap(logits, min_p),
+              "Loom min-p logits and probabilities must not overlap");
+}
+
+void launch_min_p_filter(at::Tensor logits, const at::Tensor& min_p) {
+  const auto rows = static_cast<uint32_t>(logits.size(0));
+  const auto vocab_size = static_cast<uint32_t>(logits.size(1));
+  const auto row_stride = static_cast<uint64_t>(logits.stride(0));
+  const c10::cuda::CUDAGuard device_guard(logits.device());
+  const auto stream = at::cuda::getCurrentCUDAStream(logits.device().index());
+  int status = LOOM_CUDA_UNSUPPORTED;
+  if (logits.scalar_type() == at::kFloat) {
+    status = loom_cuda_min_p_filter_f32(
+        logits.data_ptr<float>(), min_p.data_ptr<float>(), rows, vocab_size,
+        row_stride, stream.stream());
+  } else if (logits.scalar_type() == at::kHalf) {
+    status = loom_cuda_min_p_filter_f16(
+        reinterpret_cast<uint16_t*>(logits.data_ptr<at::Half>()),
+        min_p.data_ptr<float>(), rows, vocab_size, row_stride, stream.stream());
+  } else if (logits.scalar_type() == at::kBFloat16) {
+    status = loom_cuda_min_p_filter_bf16(
+        reinterpret_cast<uint16_t*>(logits.data_ptr<at::BFloat16>()),
+        min_p.data_ptr<float>(), rows, vocab_size, row_stride, stream.stream());
+  }
+  TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
+              "Loom CUDA min-p launch failed: ",
+              loom_cuda_status_string(status), " (status ", status, ")");
+  min_p_filter_launches.fetch_add(1, std::memory_order_relaxed);
+}
+
+void min_p_filter(at::Tensor logits, const at::Tensor& min_p) {
+  check_min_p_filter_contract(logits, min_p);
+  launch_min_p_filter(logits, min_p);
+}
+
+int64_t min_p_filter_launch_count() {
+  return min_p_filter_launches.load(std::memory_order_relaxed);
+}
+
+void reset_min_p_filter_launch_count() {
+  min_p_filter_launches.store(0, std::memory_order_relaxed);
+}
+
 void check_rope_paged_kv_write_contract(
     const at::Tensor& query, const at::Tensor& key, const at::Tensor& value,
     const at::Tensor& positions, const at::Tensor& cos_sin_cache,
@@ -808,6 +884,13 @@ TORCH_LIBRARY(loom_kernels, library) {
               &selected_token_logprobs_launch_count);
   library.def("reset_selected_token_logprobs_launch_count() -> ()",
               &reset_selected_token_logprobs_launch_count);
+  library.def("min_p_filter_(Tensor(a!) logits, Tensor min_p) -> ()");
+  library.def(
+      "min_p_filter_unchecked_(Tensor(a!) logits, Tensor min_p) -> ()");
+  library.def("min_p_filter_launch_count() -> int",
+              &min_p_filter_launch_count);
+  library.def("reset_min_p_filter_launch_count() -> ()",
+              &reset_min_p_filter_launch_count);
   library.def(
       "rope_paged_kv_write_(Tensor(a!) query, Tensor(b!) key, Tensor value, "
       "Tensor positions, Tensor cos_sin_cache, Tensor(c!) key_cache, "
@@ -834,6 +917,8 @@ TORCH_LIBRARY_IMPL(loom_kernels, CUDA, library) {
                &vllm_silu_and_mul_per_block_fp8);
   library.impl("greedy_sample_logprobs", &greedy_sample_logprobs);
   library.impl("selected_token_logprobs", &selected_token_logprobs);
+  library.impl("min_p_filter_", &min_p_filter);
+  library.impl("min_p_filter_unchecked_", &launch_min_p_filter);
   library.impl("rope_paged_kv_write_", &rope_paged_kv_write);
   library.impl("rope_paged_kv_write_unchecked_",
                &launch_rope_paged_kv_write);

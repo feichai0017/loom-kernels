@@ -49,6 +49,13 @@ def selected_token_logprobs(*args: Any, **kwargs: Any) -> Any:
     return implementation(*args, **kwargs)
 
 
+def min_p_filter_(*args: Any, **kwargs: Any) -> Any:
+    """Lazily apply in-place min-p filtering without materializing softmax."""
+    from .torch_ops import min_p_filter_ as implementation
+
+    return implementation(*args, **kwargs)
+
+
 def silu_and_mul(*args: Any, **kwargs: Any) -> Any:
     """Lazily execute fused split-half SiLU-and-Mul."""
     from .torch_ops import silu_and_mul as implementation
@@ -81,6 +88,7 @@ __all__ = [
     "__version__",
     "add_rms_norm_",
     "greedy_sample_logprobs",
+    "min_p_filter_",
     "rms_norm_dynamic_fp8",
     "rms_norm_dynamic_fp8_out",
     "rope_paged_kv_write_",

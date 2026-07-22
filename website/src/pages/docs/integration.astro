@@ -38,7 +38,7 @@ CUDA_HOME=/usr/local/cuda-13.1 \
       </p>
 
       <h2>Direct PyTorch use</h2>
-      <pre><code>from loom_kernels import greedy_sample_logprobs, selected_token_logprobs, silu_and_mul_dynamic_fp8
+      <pre><code>from loom_kernels import greedy_sample_logprobs, min_p_filter_, selected_token_logprobs, silu_and_mul_dynamic_fp8
 
 fp8_output, block_scales = silu_and_mul_dynamic_fp8(
     gate_and_up_bf16,
@@ -46,7 +46,8 @@ fp8_output, block_scales = silu_and_mul_dynamic_fp8(
 )
 
 token_ids, logprobs, ranks = greedy_sample_logprobs(logits)
-logprobs, ranks = selected_token_logprobs(logits, sampled_ids_i64)</code></pre>
+logprobs, ranks = selected_token_logprobs(logits, sampled_ids_i64)
+min_p_filter_(sampling_logits_f32, min_p_f32)</code></pre>
 
       <h2>vLLM Add + RMSNorm provider</h2>
       <pre><code>from vllm import LLM
@@ -130,6 +131,17 @@ engine = LLM(model="/path/to/model")</code></pre>
         processed modes, and unsupported layouts fall back unchanged. The
         order-reversed Qwen2.5 top-k/top-p H20 gate preserves every token and
         rank while improving batch latency and TPOT.
+      </p>
+
+      <h2>vLLM Min-P processor</h2>
+      <pre><code>LOOM_KERNELS_ENABLE_MIN_P=1 python your_service.py</code></pre>
+      <p>
+        Loom cancels the softmax denominator and filters in place from each
+        row maximum. The H20-qualified route requires at least 32 rows and a
+        65,536-token vocabulary; smaller shapes call the original vLLM 0.24
+        processor because the current kernel is slower there. The qualified
+        128-row case is 1.885× faster and removes 97.24 MB of tensor-sized
+        temporary allocations. A real-model end-to-end gate remains open.
       </p>
 
       <h2>Compatibility contract</h2>

@@ -16,8 +16,8 @@ execution, or lower dispatch overhead can create measurable engine value.
 ## Current Status
 
 - `loom-kernels`: dtype, tensor, capability, normalization, quantization,
-  split-half SiLU-and-Mul, RoPE/KV, greedy sampling, and arbitrary
-  selected-token logprob contracts plus CPU oracles;
+  split-half SiLU-and-Mul, RoPE/KV, logits processing, sampling, and base paged
+  decode-attention contracts plus CPU oracles;
 - `loom-cuda`: safe CUDA stream/buffer/event ownership and checked dispatch;
 - `loom-cuda-sys`: dependency-light raw C ABI;
 - handwritten F32 plus vectorized FP16/BF16 RMSNorm, fused Add+RMSNorm,
@@ -49,6 +49,14 @@ execution, or lower dispatch overhead can create measurable engine value.
   operator is `2.77-3.78x` faster for 1-128 Qwen-sized rows; order-reversed
   Qwen2.5 top-k/top-p runs show exact tokens/ranks and `1.044-1.125x`
   batch-latency ratios;
+- in-place Min-P filtering uses the equivalent
+  `logit < row_max + log(min_p)` threshold, avoiding full probability and mask
+  tensors. The opt-in vLLM route is performance-gated: H20 measurements use
+  Loom only for at least 32 rows and a 65,536-token vocabulary, with smaller
+  decode batches falling back to vLLM;
+- paged MQA/GQA decode attention now has an engine-shaped Rust contract and
+  stable CPU oracle. CUDA and vLLM execution are intentionally still marked
+  unsupported until correctness and named-baseline gates exist;
 
 ## Workspace
 
@@ -71,7 +79,7 @@ execution, or lower dispatch overhead can create measurable engine value.
 | P0 | RoPE+KV write, KV append/layout/quantization | removes extra HBM passes around KV-cache updates |
 | P0 | SwiGLU/GELU fused epilogues | combines activation, multiply, bias, and quantization |
 | P0 | sampling and selected-token logprob | reduces decode-tail launches and temporary tensors |
-| P1 | paged decode attention | important, but only after the common backend is stable |
+| P1 | paged decode attention | base contract/oracle are ready; CUDA must beat the engine-selected backend |
 | P1 | MoE top-k, permutation, grouped dispatch | routing and movement often dominate small expert batches |
 | P1 | quantized GEMM epilogues | wrap vendor GEMM and own the fusion, not another basic GEMM |
 | P2 | communication-aware fusions | RMSNorm/all-reduce and TP epilogues after single-GPU evidence |
@@ -271,6 +279,17 @@ ratios span `1.044-1.125x`, and TPOT ratios span `1.054-1.130x`. See the
 [baseline-first](docs/results/h20-vllm-selected-logprobs-baseline-first-20260722.json)
 and [Loom-first](docs/results/h20-vllm-selected-logprobs-loom-first-20260722.json)
 reports. This does not claim Loom accelerates top-k/top-p selection itself.
+
+The Min-P
+[operator report](docs/results/h20-min-p-filter-20260722.json) compares the
+exact vLLM 0.24 F32 processor over a 151,936-token vocabulary. Loom removes
+`0.76-97.24 MB` of per-call probability/mask temporaries. It is slower for 1
+and 8 rows, `1.10x` faster at 32 rows, and `1.89x` faster at 128 rows, which is
+why the engine adapter has an explicit measured-shape fallback rather than a
+blanket replacement. A separate
+[65,536-token boundary sweep](docs/results/h20-min-p-filter-vocab65536-20260722.json)
+measures `1.35x` at 32 rows and `2.35x` at 128 rows, validating the lower
+vocabulary gate.
 
 For the Python build and engine configuration, see the
 [vLLM IR provider guide](docs/guides/vllm-ir-provider.md).

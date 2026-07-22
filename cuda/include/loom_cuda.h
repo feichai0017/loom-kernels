@@ -142,6 +142,16 @@ int loom_cuda_selected_token_logprobs_bf16(
     int64_t* ranks, uint32_t rows, uint32_t vocab_size, uint64_t row_stride,
     void* stream);
 
+int loom_cuda_min_p_filter_f32(float* logits, const float* min_p,
+                               uint32_t rows, uint32_t vocab_size,
+                               uint64_t row_stride, void* stream);
+int loom_cuda_min_p_filter_f16(uint16_t* logits, const float* min_p,
+                               uint32_t rows, uint32_t vocab_size,
+                               uint64_t row_stride, void* stream);
+int loom_cuda_min_p_filter_bf16(uint16_t* logits, const float* min_p,
+                                uint32_t rows, uint32_t vocab_size,
+                                uint64_t row_stride, void* stream);
+
 // Fused in-place RoPE and paged K/V cache write. Query, key, and value have
 // logical [tokens, heads, dim] dimensions, a unit dim stride, and explicit
 // token/head element strides so packed-QKV views do not need materialization.

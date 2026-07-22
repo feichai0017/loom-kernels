@@ -19,6 +19,10 @@ externally managed deployment can set `LOOM_KERNELS_CUDA_LIBRARY` and
 `LOOM_KERNELS_TORCH_LIBRARY` to their absolute paths. Automated binary wheels
 are not published yet.
 
+The vLLM 0.24 Min-P processor replacement is opt-in with
+`LOOM_KERNELS_ENABLE_MIN_P=1`. Its H20-qualified fast path requires at least 32
+rows and a 65,536-token vocabulary; smaller shapes use vLLM's original path.
+
 Install the framework dependencies needed by the consumer:
 
 ```bash

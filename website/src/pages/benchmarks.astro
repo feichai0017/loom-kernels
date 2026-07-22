@@ -45,7 +45,9 @@ import { evidence, repositoryUrl } from "../data/site";
         greedy sampled-logprob fusion reaches 3.16–4.35× against vLLM's exact
         full decode-tail sequence for 1–128 Qwen-vocabulary rows. The general
         selected-token path reaches 2.77–3.78× while leaving sampling policy
-        with vLLM.
+        with vLLM. Min-P crosses from a small-batch regression to 1.10× at 32
+        rows and 1.89× at 128 rows, so its adapter routes smaller shapes back
+        to vLLM instead of applying a blanket override.
       </p>
 
       <h2>Validation ladder</h2>
@@ -83,6 +85,9 @@ python benchmarks/vllm_silu_and_mul_dynamic_fp8.py \
 
 .venv-vllm/bin/python benchmarks/vllm_selected_token_logprobs.py \
   --rows 1,2,4,8,16,32,64,128 --vocab-size 151936 --dtype bf16
+
+.venv-vllm/bin/python benchmarks/vllm_min_p_filter.py \
+  --rows 1,8,32,128 --vocab-size 151936
 
 .venv-vllm/bin/python benchmarks/vllm_engine_greedy_logprobs.py \
   --model /path/to/Qwen2.5-0.5B-Instruct --sampling-mode top-k-top-p \

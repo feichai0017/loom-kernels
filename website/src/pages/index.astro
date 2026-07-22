@@ -54,8 +54,8 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
   </section>
 
   <section class="metrics-strip" aria-label="Project status">
-    <div class="metric"><strong>08</strong><span>qualified operator paths</span></div>
-    <div class="metric"><strong>112/112</strong><span>H20 Python tests passing</span></div>
+    <div class="metric"><strong>09</strong><span>qualified operator paths</span></div>
+    <div class="metric"><strong>128/128</strong><span>H20 Python tests passing</span></div>
     <div class="metric"><strong>SM90</strong><span>NVIDIA H20 evidence</span></div>
     <div class="metric"><strong>v0.24</strong><span>vLLM integration target</span></div>
   </section>
@@ -150,8 +150,9 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
     <p class="caveat">
       The pinned Qwen2.5 greedy and top-k/top-p selected-logprob gates show
       order-stable real-engine latency and TPOT wins. FP8 and RoPE+KV prove
-      exact invocation but remain near parity; serving-scale concurrency,
-      memory, and goodput stay separate admission gates.
+      exact invocation but remain near parity. Min-P is shape-gated from its
+      measured crossover; serving-scale concurrency, memory, and goodput stay
+      separate admission gates.
     </p>
   </section>
 

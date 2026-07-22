@@ -67,8 +67,12 @@ Status: in progress.
   penalties, top-k/top-p, RNG, and token selection; Rust/CUDA/PyTorch plus
   order-reversed Qwen2.5 H20 gates show exact token/rank parity and material
   operator and end-to-end benefit;
+- ~~in-place min-p filtering~~ — Rust/CUDA/PyTorch and a vLLM 0.24 opt-in are
+  complete; H20 evidence selects Loom only for at least 32 rows and a 65,536+
+  vocabulary, while smaller shapes fall back because the one-block-per-row
+  kernel is slower there;
 - fused logits bias, masking, bad-word suppression, and history penalties;
-- top-k/top-p/min-p filtering, renormalization, and deterministic RNG sampling;
+- top-k/top-p filtering, renormalization, and deterministic RNG sampling;
 - top-k logprobs.
 
 Exit: fewer launches and temporary tensors with identical token results. The
@@ -87,9 +91,12 @@ Exit: routing and movement reduce model-level MoE latency on a named engine.
 
 ## K6: Attention
 
-Status: planned after K1-K4 establish the common backend.
+Status: in progress.
 
-- paged MQA/GQA decode attention under the standard operator contract;
+- ~~paged MQA/GQA base contract and CPU oracle~~ — one query per request,
+  native paged KV, MQA/GQA mapping, and block-table validation are fixed;
+- handwritten short-context and split-K/LSE CUDA candidates;
+- current-stream PyTorch and vLLM 0.24 engine adapters;
 - vendor attention integration where it wins;
 - split-KV/LSE merge, sliding-window variants, and MLA when a consumer exists.
 
