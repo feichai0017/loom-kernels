@@ -193,6 +193,46 @@ int loom_cuda_paged_decode_attention_bf16(
     uint32_t max_blocks_per_sequence, uint32_t max_sequence_length,
     float scale, void* stream);
 
+// Optional long-context split-K path. The sizing function returns zero when
+// the shape should use the base ABI above. Otherwise the caller owns an F32
+// workspace with at least the returned element count for the complete pair of
+// partial and stable log-sum-exp merge kernels. The original entry points stay
+// allocation-free and ABI-compatible.
+uint64_t loom_cuda_paged_decode_attention_split_k_workspace_elements(
+    uint32_t sequences, uint32_t query_heads, uint32_t kv_heads,
+    uint32_t head_size, uint32_t value_head_size,
+    uint32_t max_sequence_length);
+
+int loom_cuda_paged_decode_attention_split_k_f32(
+    const float* query, const float* key_cache, const float* value_cache,
+    const int32_t* block_tables, const int32_t* sequence_lengths,
+    float* output, float* workspace, uint64_t workspace_elements,
+    uint32_t sequences, uint32_t query_heads, uint32_t kv_heads,
+    uint32_t head_size, uint32_t value_head_size, uint32_t num_blocks,
+    uint32_t block_size, uint64_t key_block_stride,
+    uint64_t value_block_stride, uint32_t max_blocks_per_sequence,
+    uint32_t max_sequence_length, float scale, void* stream);
+
+int loom_cuda_paged_decode_attention_split_k_f16(
+    const uint16_t* query, const uint16_t* key_cache,
+    const uint16_t* value_cache, const int32_t* block_tables,
+    const int32_t* sequence_lengths, uint16_t* output, float* workspace,
+    uint64_t workspace_elements, uint32_t sequences, uint32_t query_heads,
+    uint32_t kv_heads, uint32_t head_size, uint32_t value_head_size,
+    uint32_t num_blocks, uint32_t block_size, uint64_t key_block_stride,
+    uint64_t value_block_stride, uint32_t max_blocks_per_sequence,
+    uint32_t max_sequence_length, float scale, void* stream);
+
+int loom_cuda_paged_decode_attention_split_k_bf16(
+    const uint16_t* query, const uint16_t* key_cache,
+    const uint16_t* value_cache, const int32_t* block_tables,
+    const int32_t* sequence_lengths, uint16_t* output, float* workspace,
+    uint64_t workspace_elements, uint32_t sequences, uint32_t query_heads,
+    uint32_t kv_heads, uint32_t head_size, uint32_t value_head_size,
+    uint32_t num_blocks, uint32_t block_size, uint64_t key_block_stride,
+    uint64_t value_block_stride, uint32_t max_blocks_per_sequence,
+    uint32_t max_sequence_length, float scale, void* stream);
+
 // Fused in-place RoPE and paged K/V cache write. Query, key, and value have
 // logical [tokens, heads, dim] dimensions, a unit dim stride, and explicit
 // token/head element strides so packed-QKV views do not need materialization.

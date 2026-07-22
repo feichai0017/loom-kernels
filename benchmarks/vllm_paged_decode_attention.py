@@ -13,6 +13,7 @@ from typing import Callable
 
 import torch
 
+from loom_kernels._native import launch_paged_decode_attention
 from loom_kernels.torch_ops import PAGED_DECODE_MAX_CONTEXT, adapter_backend
 
 
@@ -40,6 +41,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=500)
     parser.add_argument("--samples", type=int, default=7)
     parser.add_argument("--seed", type=int, default=709)
+    parser.add_argument(
+        "--compare-legacy",
+        action="store_true",
+        help="also measure Loom's allocation-free single-CTA C ABI",
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -64,42 +70,45 @@ def timed_sample(operation: Callable[[], object], iterations: int) -> float:
     return float(start.elapsed_time(end) * 1000.0 / iterations)
 
 
-def measure_pair(
-    loom: Callable[[], object],
-    baseline: Callable[[], object],
+def measure_operations(
+    operations: dict[str, Callable[[], object]],
     warmup: int,
     iterations: int,
     samples: int,
-) -> tuple[dict[str, object], dict[str, object]]:
-    operations = {"loom": loom, "baseline": baseline}
+) -> dict[str, dict[str, object]]:
+    providers = tuple(operations)
+
+    def provider_order(repeat: int) -> tuple[str, ...]:
+        offset = repeat % len(providers)
+        order = providers[offset:] + providers[:offset]
+        if (repeat // len(providers)) % 2:
+            order = tuple(reversed(order))
+        return order
+
     for repeat in range(warmup):
-        order = ("baseline", "loom") if repeat % 2 == 0 else ("loom", "baseline")
-        for provider in order:
+        for provider in provider_order(repeat):
             operations[provider]()
     torch.cuda.synchronize()
 
-    eager = {"loom": [], "baseline": []}
+    eager: dict[str, list[float]] = {provider: [] for provider in providers}
     for repeat in range(samples):
-        order = ("baseline", "loom") if repeat % 2 == 0 else ("loom", "baseline")
-        for provider in order:
+        for provider in provider_order(repeat):
             eager[provider].append(timed_sample(operations[provider], iterations))
 
     graphs: dict[str, torch.cuda.CUDAGraph] = {}
-    for provider in ("baseline", "loom"):
+    for provider in providers:
         graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(graph):
             operations[provider]()
         graphs[provider] = graph
     for repeat in range(warmup):
-        order = ("loom", "baseline") if repeat % 2 == 0 else ("baseline", "loom")
-        for provider in order:
+        for provider in reversed(provider_order(repeat)):
             graphs[provider].replay()
     torch.cuda.synchronize()
 
-    replay = {"loom": [], "baseline": []}
+    replay: dict[str, list[float]] = {provider: [] for provider in providers}
     for repeat in range(samples):
-        order = ("loom", "baseline") if repeat % 2 == 0 else ("baseline", "loom")
-        for provider in order:
+        for provider in reversed(provider_order(repeat)):
             replay[provider].append(
                 timed_sample(graphs[provider].replay, iterations)
             )
@@ -110,7 +119,21 @@ def measure_pair(
             "cuda_graph_replay_latency": latency_summary(replay[provider]),
         }
 
-    return result("loom"), result("baseline")
+    return {provider: result(provider) for provider in providers}
+
+
+def measure_pair(
+    loom: Callable[[], object],
+    baseline: Callable[[], object],
+    warmup: int,
+    iterations: int,
+    samples: int,
+) -> tuple[dict[str, object], dict[str, object]]:
+    """Preserve the two-provider helper imported by backend benchmarks."""
+    measurements = measure_operations(
+        {"loom": loom, "baseline": baseline}, warmup, iterations, samples
+    )
+    return measurements["loom"], measurements["baseline"]
 
 
 def benchmark_case(
@@ -127,6 +150,7 @@ def benchmark_case(
     iterations: int,
     samples: int,
     seed: int,
+    compare_legacy: bool,
     flash_attn_varlen_func: Callable[..., torch.Tensor],
     fa_version: int,
 ) -> dict[str, object]:
@@ -164,6 +188,7 @@ def benchmark_case(
     cu_seqlens_q = torch.arange(batch + 1, device="cuda", dtype=torch.int32)
     scale = head_size**-0.5
     loom_output = torch.empty_like(query)
+    legacy_output = torch.empty_like(query) if compare_legacy else None
     baseline_output = torch.empty_like(query)
 
     def loom() -> None:
@@ -176,6 +201,32 @@ def benchmark_case(
             loom_output,
             context,
             scale,
+        )
+
+    def legacy() -> None:
+        if legacy_output is None:
+            raise RuntimeError("legacy provider was not requested")
+        launch_paged_decode_attention(
+            "f16" if dtype == torch.float16 else "bf16",
+            query.data_ptr(),
+            key_cache.data_ptr(),
+            value_cache.data_ptr(),
+            block_tables.data_ptr(),
+            sequence_lengths.data_ptr(),
+            legacy_output.data_ptr(),
+            batch,
+            query_heads,
+            kv_heads,
+            head_size,
+            head_size,
+            num_blocks,
+            block_size,
+            key_cache.stride(0),
+            value_cache.stride(0),
+            max_blocks,
+            context,
+            scale,
+            torch.cuda.current_stream().cuda_stream,
         )
 
     def baseline() -> None:
@@ -196,19 +247,33 @@ def benchmark_case(
 
     loom()
     baseline()
+    if compare_legacy:
+        legacy()
     torch.cuda.synchronize()
     torch.testing.assert_close(
         loom_output, baseline_output, rtol=2.0e-2, atol=2.0e-2
     )
+    if legacy_output is not None:
+        torch.testing.assert_close(
+            loom_output, legacy_output, rtol=2.0e-2, atol=2.0e-2
+        )
 
-    loom_measurement, baseline_measurement = measure_pair(
-        loom, baseline, warmup, iterations, samples
+    operations: dict[str, Callable[[], object]] = {
+        "loom": loom,
+        "vllm_flash_attention": baseline,
+    }
+    if compare_legacy:
+        operations["loom_legacy"] = legacy
+    measurements = measure_operations(
+        operations, warmup, iterations, samples
     )
+    loom_measurement = measurements["loom"]
+    baseline_measurement = measurements["vllm_flash_attention"]
     loom_eager = loom_measurement["eager_dispatch_latency"]["median_us"]
     baseline_eager = baseline_measurement["eager_dispatch_latency"]["median_us"]
     loom_graph = loom_measurement["cuda_graph_replay_latency"]["median_us"]
     baseline_graph = baseline_measurement["cuda_graph_replay_latency"]["median_us"]
-    return {
+    result = {
         "batch": batch,
         "context": context,
         "minimum_sequence_length": int(sequence_lengths.min().item()),
@@ -220,6 +285,25 @@ def benchmark_case(
             (loom_output.float() - baseline_output.float()).abs().max().item()
         ),
     }
+    if legacy_output is not None:
+        legacy_measurement = measurements["loom_legacy"]
+        legacy_eager = legacy_measurement["eager_dispatch_latency"]["median_us"]
+        legacy_graph = legacy_measurement["cuda_graph_replay_latency"]["median_us"]
+        result.update(
+            {
+                "loom_legacy": legacy_measurement,
+                "split_k_eager_speedup_over_legacy": legacy_eager / loom_eager,
+                "split_k_cuda_graph_speedup_over_legacy": legacy_graph
+                / loom_graph,
+                "split_k_vs_legacy_max_abs_error": float(
+                    (loom_output.float() - legacy_output.float())
+                    .abs()
+                    .max()
+                    .item()
+                ),
+            }
+        )
+    return result
 
 
 def main() -> None:
@@ -267,6 +351,7 @@ def main() -> None:
             iterations=args.iterations,
             samples=args.samples,
             seed=args.seed,
+            compare_legacy=args.compare_legacy,
             flash_attn_varlen_func=flash_attn_varlen_func,
             fa_version=fa_version,
         )
@@ -288,6 +373,7 @@ def main() -> None:
             "block_size": args.block_size,
             "cache_layout": "NHD",
             "cache_storage": args.cache_storage,
+            "compare_legacy": args.compare_legacy,
             "key_block_stride": (
                 (2 if args.cache_storage == "vllm-interleaved" else 1)
                 * args.block_size
@@ -306,7 +392,9 @@ def main() -> None:
             "warmup": args.warmup,
             "iterations_per_sample": args.iterations,
             "samples": args.samples,
-            "provider_order": "alternated for every eager and graph sample",
+            "provider_order": (
+                "rotated and reversed across every eager and graph sample"
+            ),
             "eager": "CUDA events over Python-dispatched provider calls",
             "cuda_graph": "CUDA events over graph replay",
         },

@@ -52,7 +52,10 @@ import { evidence, repositoryUrl } from "../data/site";
         D128, context-at-most-32 backend cases win at 1.154–2.374×, while the
         context-64 controls fall back to FA3 at graph parity. A broader
         156-case sweep still contains 74 losses, so this is not a blanket
-        attention replacement.
+        attention replacement. The D128 long-context split-K/LSE path beats
+        legacy Loom in all 16 BF16 cases by 1.14–6.22× (2.50× median). At
+        batch one it reaches 90–95% of FA3 through 512 tokens, but FA3 remains
+        faster overall and continues to own the engine's long-context route.
       </p>
 
       <h2>Validation ladder</h2>
@@ -95,9 +98,9 @@ python benchmarks/vllm_silu_and_mul_dynamic_fp8.py \
   --rows 1,8,32,128 --vocab-size 151936
 
 .venv-vllm/bin/python benchmarks/vllm_paged_decode_attention.py \
-  --batches 1,8,32 --contexts 16,32,64,128,256,512 \
+  --batches 1,2,4,8 --contexts 128,256,512,1024 \
   --dtype bf16 --query-heads 32 --kv-heads 8 --head-size 128 \
-  --cache-storage vllm-interleaved \
+  --cache-storage vllm-interleaved --compare-legacy \
   --warmup 30 --iterations 200 --samples 7
 
 .venv-vllm/bin/python benchmarks/vllm_paged_decode_backend.py \

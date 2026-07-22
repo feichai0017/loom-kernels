@@ -65,7 +65,7 @@ export const supportedOperators = [
   {
     name: "Paged MQA/GQA decode",
     dtypes: "F32 · FP16 · BF16",
-    boundary: "GQA packing + native interleaved paged-KV reads; shape-gated vLLM route",
+    boundary: "GQA packing + local split-K/LSE; short shapes route into vLLM",
     status: "supported",
   },
 ];
@@ -80,8 +80,8 @@ export const nextOperators = [
     reason: "Own the launch-heavy path around vendor grouped GEMM.",
   },
   {
-    name: "Paged decode 128+",
-    reason: "Extend the qualified context-32 FA3 fallback route with broader heads and split-K/LSE kernels.",
+    name: "Paged decode breadth",
+    reason: "Close the 1,024-token FA3 gap and qualify broader heads without widening from microbenchmarks alone.",
   },
 ];
 
@@ -139,5 +139,11 @@ export const evidence = [
     shape: "FP16/BF16 · Hq/Hkv 32/8 · context ≤ 32",
     result: "1.154–2.374×",
     detail: "24/24 routed vLLM backend cases win; other shapes fall back to FA3",
+  },
+  {
+    operator: "Paged decode split-K/LSE",
+    shape: "BF16 · batch 1–8 · context 128–1,024",
+    result: "1.14–6.22×",
+    detail: "CUDA Graph ratio vs legacy Loom; FA3 remains the engine fallback",
   },
 ];

@@ -110,9 +110,14 @@ Status: in progress.
 - pretrained-model gate and broader head geometry — the first Qwen2.5 `14/2`,
   D64 attempt hit the engine but failed exact-token and latency gates, so it
   remains intentionally unrouted;
-- tiled or split-K/LSE optimization for the measured 128-1024-token gap;
+- ~~tiled split-K/LSE optimization for 128-1024 tokens~~ — explicit
+  caller-owned Rust/C workspace, stable partial-state merge, CUDA Graph-safe
+  PyTorch dispatch, and H20 legacy/FA3 gates are complete for D128 batches
+  1-8; it materially improves Loom but does not widen the vLLM route because
+  FA3 remains faster;
 - vendor attention integration where it wins;
-- split-KV/LSE merge, sliding-window variants, and MLA when a consumer exists.
+- distributed split-KV/LSE merge, sliding-window variants, and MLA when a
+  consumer exists.
 
 Exit: hardware-qualified engine evidence determines admission; prior Loom
 Attention prototype code is not carried forward automatically.

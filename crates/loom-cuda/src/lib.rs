@@ -13,6 +13,8 @@ mod min_p;
 #[cfg(feature = "cuda")]
 mod paged_decode;
 #[cfg(feature = "cuda")]
+pub use paged_decode::paged_decode_attention_split_k_workspace_elements;
+#[cfg(feature = "cuda")]
 mod rms_norm;
 #[cfg(feature = "cuda")]
 mod rope_paged_kv;

@@ -51,7 +51,7 @@ Those options become separate contract fields only after the base kernel and a
 named engine path are correct. They will not be hidden behind silent fallback
 inside the Rust operator.
 
-## Implemented Short-Context Kernels
+## Implemented CUDA Kernels
 
 The base handwritten CUDA implementation assigns one 256-thread block to each
 `(sequence, query_head)` pair. Eight warps compute Q/K dot products over the
@@ -72,7 +72,31 @@ When the grid contains at least 128 `(sequence, kv_head)` work items and the
 GQA ratio is divisible by four, the H20-qualified dispatch packs four query
 heads instead. A partial four-head tail requires at least 256 resulting packed
 blocks; smaller grids keep two-head packing to retain parallelism. The dynamic
-score and token-offset buffers deliberately cap all paths at 1,024 tokens.
+score and token-offset buffers serve the one-pass path; the public contract
+deliberately caps every implementation at 1,024 tokens.
+
+For D128 with equal K/V widths, batches up to eight, and maximum contexts from
+128 through 1,024, the C++ dispatcher selects a two-stage split-K path. Stage
+one partitions the logical KV sequence into at most 16 contiguous tiles and
+writes one F32 state per packed query head:
+
+```text
+partial_state = (local_max, local_exp_sum, unnormalized_output[Dv])
+```
+
+Stage two finds the global maximum and rescales every partial numerator and
+denominator by `exp(local_max - global_max)` before summation. This is the
+stable LSE merge; averaging independently normalized tile outputs would be
+incorrect. Dispatch keeps at most 64 tokens in a tile while targeting at least
+128 partial CTAs. It packs two GQA heads by default and uses four only for the
+measured higher-work regime `batch * max_context >= 4096`.
+
+The old allocation-free ABI remains unchanged. New sizing and split-K entry
+points accept caller-owned F32 workspace; safe Rust exposes the same explicit
+ownership contract. The PyTorch C++ bridge obtains a temporary tensor from the
+framework allocator, so CUDA Graph capture owns a stable allocation while
+graph replay performs only the two captured kernel launches. Shapes outside
+the qualified split-K predicate retain the original one-pass path.
 
 The C ABI carries independent K/V block strides and accepts contiguous int32
 block tables and sequence lengths, matching vLLM's live metadata. Their active
@@ -111,13 +135,14 @@ integration, not a new global attention backend.
 6. H20 comparison against the engine-selected FA3/FlashInfer implementation;
 7. real-model TPOT, throughput, and KV-memory evidence.
 
-Steps 1-6 are complete for the narrow route above. Randomized
-PyTorch tests cover MQA/GQA, partial final blocks, shuffled physical blocks,
-odd GQA tail groups, odd head sizes, distinct value widths, F32/FP16/BF16,
-external streams, FakeTensor/schema, `torch.compile`, CUDA Graph replay,
-vLLM-interleaved cache strides, and launch telemetry. On NVIDIA H20 all 31
-focused paged-decode tests, the 34-test paged-decode/vLLM gate, and the
-162-test Python suite pass.
+Steps 1-6 are complete for the narrow route above. Randomized PyTorch tests
+cover MQA/GQA, partial final blocks, shuffled physical blocks, odd GQA tail
+groups, odd head sizes, distinct value widths, F32/FP16/BF16, external
+streams, FakeTensor/schema, `torch.compile`, CUDA Graph replay,
+vLLM-interleaved cache strides, caller-owned split-K workspace, stable LSE
+merge, and launch telemetry. On NVIDIA H20 all 46 focused paged-decode tests,
+the 34-test paged-decode/vLLM gate, the six safe Rust CUDA tests, and the
+177-test Python suite pass.
 
 The native-interleaved 156-case shape sweep establishes why the route is
 narrow: 82 cases beat FA3 and 74 lose. A focused 132-case Hq/Hkv `32/8`
@@ -137,6 +162,15 @@ of five cases and Loom batch latency was about 3-5% higher. The route was
 therefore rejected and is absent from the adapter. This separates a useful
 general CUDA improvement from an unqualified production integration.
 
+The long-context split-K report covers BF16, interleaved block-16 cache,
+batches 1/2/4/8, and contexts 128/256/512/1,024. All 16 CUDA Graph cases beat
+Loom's prior single-CTA path: speedups range from `1.140x` to `6.223x` with a
+`2.497x` median and maximum absolute FA3 error `0.00390625`. At batch one,
+Loom reaches `90.0%`, `93.4%`, and `95.4%` of FA3 at 128, 256, and 512 tokens,
+then falls to `66.4%` at 1,024. FP16 and block-32 cross-checks show the same
+legacy wins, but FA3 remains faster overall. The vLLM route therefore stays at
+context 32 and falls back to FA3 for every long-context call.
+
 A one-layer stable-output synthetic Qwen2 gate proves actual `LLM.generate`,
 FA3 metadata, native interleaved cache, compilation, and CUDA Graph path hits:
 baseline processes record zero Loom submissions, Loom processes record 18,
@@ -147,4 +181,6 @@ evidence. Order-reversed end-to-end ratios are not stable enough for a
 model-level claim. The rejected Qwen2.5 experiment supplies pretrained-model
 evidence, but not an admissible route. Step 7 remains open for a geometry whose
 token/quality gate and end-to-end serving measurement both pass. The next
-kernel work adds a tiled or split-K/LSE path for 128-1,024 tokens.
+attention work targets the remaining 1,024-token merge gap, broader head
+geometries, and vendor fallback rather than widening the engine route from a
+microbenchmark alone.

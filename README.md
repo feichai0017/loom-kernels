@@ -59,7 +59,10 @@ execution, or lower dispatch overhead can create measurable engine value.
   GQA path reuses paged K/V loads across two or four query heads, handles odd
   final groups without slowing the full-group specialization, caches D64
   decode Q pairs in registers, and reads vLLM's native interleaved K/V views
-  without materialization. An opt-in vLLM
+  without materialization. D128 contexts from 128-1,024 tokens also have an
+  explicit caller-owned F32 split-K/LSE workspace path for batches up to eight;
+  on H20 it is `1.14-6.22x` faster than Loom's prior single-CTA kernel. An
+  opt-in vLLM
   0.24 route admits only measured FP16/BF16 Hq/Hkv `32/8`, head-size 128,
   block-size 16/32, batch 1-128, context 1-32 decode shapes and otherwise calls
   FA3. All 24 admitted backend cases win on H20 (`1.154-2.374x` CUDA Graph), while
@@ -86,7 +89,7 @@ execution, or lower dispatch overhead can create measurable engine value.
 | P0 | RoPE+KV write, KV append/layout/quantization | removes extra HBM passes around KV-cache updates |
 | P0 | SwiGLU/GELU fused epilogues | combines activation, multiply, bias, and quantization |
 | P0 | sampling and selected-token logprob | reduces decode-tail launches and temporary tensors |
-| P1 | paged decode attention | native-cache short-context vLLM route is qualified; broaden heads and build the 128+ token path |
+| P1 | paged decode attention | short-context vLLM route and local D128 split-K are qualified; broaden heads and close the 1,024-token FA3 gap |
 | P1 | MoE top-k, permutation, grouped dispatch | routing and movement often dominate small expert batches |
 | P1 | quantized GEMM epilogues | wrap vendor GEMM and own the fusion, not another basic GEMM |
 | P2 | communication-aware fusions | RMSNorm/all-reduce and TP epilogues after single-GPU evidence |
@@ -203,8 +206,8 @@ PYTHONPATH=python/src .venv-vllm/bin/python benchmarks/vllm_rope_paged_kv.py \
 
 PYTHONPATH=python/src .venv-vllm/bin/python \
   benchmarks/vllm_paged_decode_attention.py \
-  --dtype bf16 --batches 1,8,32 --contexts 16,32,64,128,256,512 \
-  --cache-storage vllm-interleaved \
+  --dtype bf16 --batches 1,2,4,8 --contexts 128,256,512,1024 \
+  --cache-storage vllm-interleaved --compare-legacy \
   --warmup 30 --iterations 200 --samples 7
 
 PYTHONPATH=python/src .venv-vllm/bin/python \
@@ -354,6 +357,18 @@ hit Loom 408 times but preserved all generated tokens in only two of five
 cases and was about 3-5% slower. The Qwen route was removed. The
 [non-regression backend gate](docs/results/h20-vllm-paged-decode-tail-gqa-backend-20260722.json)
 keeps the existing `32/8`, D128 route at 24/24 wins.
+
+The long-context
+[BF16/block-16 split-K report](docs/results/h20-paged-decode-split-k-20260722.json)
+measures the new stable `(max, denominator, numerator)` LSE merge against both
+the prior Loom kernel and FA3 at batches 1/2/4/8 and contexts
+128/256/512/1,024. Every CUDA Graph case beats legacy Loom
+(`1.14-6.22x`, median `2.50x`); batch-one 128/256/512-token cases reach
+`90.0%/93.4%/95.4%` of FA3. The
+[FP16](docs/results/h20-paged-decode-split-k-f16-20260722.json) and
+[block-32](docs/results/h20-paged-decode-split-k-block32-20260722.json)
+cross-checks preserve the legacy win. FA3 remains faster overall, so this
+improves Loom's Rust/CUDA backend without widening the vLLM long-context route.
 
 For the Python build and engine configuration, see the
 [vLLM IR provider guide](docs/guides/vllm-ir-provider.md).

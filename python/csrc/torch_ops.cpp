@@ -955,40 +955,100 @@ void launch_paged_decode_attention(
   const auto scale_f32 = static_cast<float>(scale);
   const c10::cuda::CUDAGuard device_guard(query.device());
   const auto stream = at::cuda::getCurrentCUDAStream(query.device().index());
+  const auto split_k_workspace_elements =
+      loom_cuda_paged_decode_attention_split_k_workspace_elements(
+          sequences, query_heads, kv_heads, head_size, value_head_size,
+          max_context);
+  TORCH_CHECK(split_k_workspace_elements <=
+                  static_cast<uint64_t>(
+                      std::numeric_limits<int64_t>::max()),
+              "Loom paged decode split-K workspace exceeds PyTorch limits");
+  at::Tensor split_k_workspace;
+  if (split_k_workspace_elements != 0U) {
+    split_k_workspace = at::empty(
+        {static_cast<int64_t>(split_k_workspace_elements)},
+        query.options().dtype(at::kFloat));
+  }
+  float* split_k_workspace_pointer =
+      split_k_workspace.defined() ? split_k_workspace.data_ptr<float>()
+                                  : nullptr;
 
   int status = LOOM_CUDA_UNSUPPORTED;
   if (query.scalar_type() == at::kFloat) {
-    status = loom_cuda_paged_decode_attention_f32(
-        query.data_ptr<float>(), key_cache.data_ptr<float>(),
-        value_cache.data_ptr<float>(), block_tables.data_ptr<int32_t>(),
-        sequence_lengths.data_ptr<int32_t>(), output.data_ptr<float>(),
-        sequences, query_heads, kv_heads, head_size, value_head_size,
-        num_blocks, block_size, key_block_stride, value_block_stride,
-        max_blocks_per_sequence, max_context, scale_f32, stream.stream());
+    if (split_k_workspace_pointer != nullptr) {
+      status = loom_cuda_paged_decode_attention_split_k_f32(
+          query.data_ptr<float>(), key_cache.data_ptr<float>(),
+          value_cache.data_ptr<float>(), block_tables.data_ptr<int32_t>(),
+          sequence_lengths.data_ptr<int32_t>(), output.data_ptr<float>(),
+          split_k_workspace_pointer, split_k_workspace_elements, sequences,
+          query_heads, kv_heads, head_size, value_head_size, num_blocks,
+          block_size, key_block_stride, value_block_stride,
+          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
+    } else {
+      status = loom_cuda_paged_decode_attention_f32(
+          query.data_ptr<float>(), key_cache.data_ptr<float>(),
+          value_cache.data_ptr<float>(), block_tables.data_ptr<int32_t>(),
+          sequence_lengths.data_ptr<int32_t>(), output.data_ptr<float>(),
+          sequences, query_heads, kv_heads, head_size, value_head_size,
+          num_blocks, block_size, key_block_stride, value_block_stride,
+          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
+    }
   } else if (query.scalar_type() == at::kHalf) {
-    status = loom_cuda_paged_decode_attention_f16(
-        reinterpret_cast<const uint16_t*>(query.data_ptr<at::Half>()),
-        reinterpret_cast<const uint16_t*>(key_cache.data_ptr<at::Half>()),
-        reinterpret_cast<const uint16_t*>(value_cache.data_ptr<at::Half>()),
-        block_tables.data_ptr<int32_t>(),
-        sequence_lengths.data_ptr<int32_t>(),
-        reinterpret_cast<uint16_t*>(output.data_ptr<at::Half>()), sequences,
-        query_heads, kv_heads, head_size, value_head_size, num_blocks,
-        block_size, key_block_stride, value_block_stride,
-        max_blocks_per_sequence, max_context, scale_f32, stream.stream());
+    if (split_k_workspace_pointer != nullptr) {
+      status = loom_cuda_paged_decode_attention_split_k_f16(
+          reinterpret_cast<const uint16_t*>(query.data_ptr<at::Half>()),
+          reinterpret_cast<const uint16_t*>(key_cache.data_ptr<at::Half>()),
+          reinterpret_cast<const uint16_t*>(
+              value_cache.data_ptr<at::Half>()),
+          block_tables.data_ptr<int32_t>(),
+          sequence_lengths.data_ptr<int32_t>(),
+          reinterpret_cast<uint16_t*>(output.data_ptr<at::Half>()),
+          split_k_workspace_pointer, split_k_workspace_elements, sequences,
+          query_heads, kv_heads, head_size, value_head_size, num_blocks,
+          block_size, key_block_stride, value_block_stride,
+          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
+    } else {
+      status = loom_cuda_paged_decode_attention_f16(
+          reinterpret_cast<const uint16_t*>(query.data_ptr<at::Half>()),
+          reinterpret_cast<const uint16_t*>(key_cache.data_ptr<at::Half>()),
+          reinterpret_cast<const uint16_t*>(
+              value_cache.data_ptr<at::Half>()),
+          block_tables.data_ptr<int32_t>(),
+          sequence_lengths.data_ptr<int32_t>(),
+          reinterpret_cast<uint16_t*>(output.data_ptr<at::Half>()), sequences,
+          query_heads, kv_heads, head_size, value_head_size, num_blocks,
+          block_size, key_block_stride, value_block_stride,
+          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
+    }
   } else if (query.scalar_type() == at::kBFloat16) {
-    status = loom_cuda_paged_decode_attention_bf16(
-        reinterpret_cast<const uint16_t*>(query.data_ptr<at::BFloat16>()),
-        reinterpret_cast<const uint16_t*>(
-            key_cache.data_ptr<at::BFloat16>()),
-        reinterpret_cast<const uint16_t*>(
-            value_cache.data_ptr<at::BFloat16>()),
-        block_tables.data_ptr<int32_t>(),
-        sequence_lengths.data_ptr<int32_t>(),
-        reinterpret_cast<uint16_t*>(output.data_ptr<at::BFloat16>()),
-        sequences, query_heads, kv_heads, head_size, value_head_size,
-        num_blocks, block_size, key_block_stride, value_block_stride,
-        max_blocks_per_sequence, max_context, scale_f32, stream.stream());
+    if (split_k_workspace_pointer != nullptr) {
+      status = loom_cuda_paged_decode_attention_split_k_bf16(
+          reinterpret_cast<const uint16_t*>(query.data_ptr<at::BFloat16>()),
+          reinterpret_cast<const uint16_t*>(
+              key_cache.data_ptr<at::BFloat16>()),
+          reinterpret_cast<const uint16_t*>(
+              value_cache.data_ptr<at::BFloat16>()),
+          block_tables.data_ptr<int32_t>(),
+          sequence_lengths.data_ptr<int32_t>(),
+          reinterpret_cast<uint16_t*>(output.data_ptr<at::BFloat16>()),
+          split_k_workspace_pointer, split_k_workspace_elements, sequences,
+          query_heads, kv_heads, head_size, value_head_size, num_blocks,
+          block_size, key_block_stride, value_block_stride,
+          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
+    } else {
+      status = loom_cuda_paged_decode_attention_bf16(
+          reinterpret_cast<const uint16_t*>(query.data_ptr<at::BFloat16>()),
+          reinterpret_cast<const uint16_t*>(
+              key_cache.data_ptr<at::BFloat16>()),
+          reinterpret_cast<const uint16_t*>(
+              value_cache.data_ptr<at::BFloat16>()),
+          block_tables.data_ptr<int32_t>(),
+          sequence_lengths.data_ptr<int32_t>(),
+          reinterpret_cast<uint16_t*>(output.data_ptr<at::BFloat16>()),
+          sequences, query_heads, kv_heads, head_size, value_head_size,
+          num_blocks, block_size, key_block_stride, value_block_stride,
+          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
+    }
   }
   TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
               "Loom CUDA paged decode attention launch failed: ",

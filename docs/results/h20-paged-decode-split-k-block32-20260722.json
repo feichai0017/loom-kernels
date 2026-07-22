@@ -1,0 +1,1116 @@
+{
+  "schema_version": 1,
+  "timestamp_utc": "2026-07-22T10:03:48.576835+00:00",
+  "operator": "single-token paged MQA/GQA decode attention",
+  "candidate": "Loom paged_decode_attention_unchecked",
+  "baseline": "vLLM 0.24.0 FlashAttention varlen FA3",
+  "scope": {
+    "dtype": "bf16",
+    "query_heads": 32,
+    "kv_heads": 8,
+    "head_size": 128,
+    "value_head_size": 128,
+    "block_size": 32,
+    "cache_layout": "NHD",
+    "cache_storage": "vllm-interleaved",
+    "compare_legacy": true,
+    "key_block_stride": 65536,
+    "value_block_stride": 65536,
+    "maximum_context": 1024
+  },
+  "timing": {
+    "warmup": 15,
+    "iterations_per_sample": 100,
+    "samples": 5,
+    "provider_order": "rotated and reversed across every eager and graph sample",
+    "eager": "CUDA events over Python-dispatched provider calls",
+    "cuda_graph": "CUDA events over graph replay"
+  },
+  "environment": {
+    "gpu": "NVIDIA H20",
+    "compute_capability": [
+      9,
+      0
+    ],
+    "torch": "2.11.0+cu130",
+    "torch_cuda": "13.0",
+    "vllm": "0.24.0",
+    "flash_attention_version": 3,
+    "adapter_backend": "cpp-dispatch"
+  },
+  "acceptance": {
+    "passed": true,
+    "rtol": 0.02,
+    "atol": 0.02
+  },
+  "results": [
+    {
+      "batch": 1,
+      "context": 128,
+      "minimum_sequence_length": 128,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 11.628799438476562,
+          "median_us": 11.710079908370972,
+          "maximum_us": 11.883840560913086,
+          "samples_us": [
+            11.883840560913086,
+            11.710079908370972,
+            11.756160259246826,
+            11.628799438476562,
+            11.660799980163574
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 10.569599866867065,
+          "median_us": 10.577280521392822,
+          "maximum_us": 10.58303952217102,
+          "samples_us": [
+            10.58303952217102,
+            10.569599866867065,
+            10.578559637069702,
+            10.577280521392822,
+            10.575040578842163
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 22.46079921722412,
+          "median_us": 22.945919036865234,
+          "maximum_us": 23.385601043701172,
+          "samples_us": [
+            22.945919036865234,
+            23.26848030090332,
+            23.385601043701172,
+            22.472960948944092,
+            22.46079921722412
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 9.503039717674255,
+          "median_us": 9.50879991054535,
+          "maximum_us": 9.51807975769043,
+          "samples_us": [
+            9.51807975769043,
+            9.510080218315125,
+            9.50879991054535,
+            9.503039717674255,
+            9.506239891052246
+          ]
+        }
+      },
+      "loom_eager_speedup": 1.9595014907167545,
+      "loom_cuda_graph_speedup": 0.8989834288041767,
+      "max_abs_error": 0.001953125,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 21.603519916534424,
+          "median_us": 21.615679264068604,
+          "maximum_us": 21.638081073760986,
+          "samples_us": [
+            21.622400283813477,
+            21.615679264068604,
+            21.603519916534424,
+            21.607038974761963,
+            21.638081073760986
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 21.333439350128174,
+          "median_us": 21.347839832305908,
+          "maximum_us": 21.360960006713867,
+          "samples_us": [
+            21.360960006713867,
+            21.347839832305908,
+            21.351680755615234,
+            21.333439350128174,
+            21.34335994720459
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 1.84590365165797,
+      "split_k_cuda_graph_speedup_over_legacy": 2.018273013477269,
+      "split_k_vs_legacy_max_abs_error": 0.0
+    },
+    {
+      "batch": 1,
+      "context": 512,
+      "minimum_sequence_length": 512,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 19.32479977607727,
+          "median_us": 19.43935990333557,
+          "maximum_us": 19.47872042655945,
+          "samples_us": [
+            19.32479977607727,
+            19.47872042655945,
+            19.452799558639526,
+            19.43935990333557,
+            19.438719749450684
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 18.502720594406128,
+          "median_us": 18.511680364608765,
+          "maximum_us": 18.51263999938965,
+          "samples_us": [
+            18.511680364608765,
+            18.502720594406128,
+            18.511680364608765,
+            18.51263999938965,
+            18.509119749069214
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 22.60864019393921,
+          "median_us": 22.787840366363525,
+          "maximum_us": 23.001279830932617,
+          "samples_us": [
+            23.001279830932617,
+            22.790400981903076,
+            22.60864019393921,
+            22.787840366363525,
+            22.726399898529053
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 17.684160470962524,
+          "median_us": 17.69312024116516,
+          "maximum_us": 17.71199941635132,
+          "samples_us": [
+            17.700159549713135,
+            17.69312024116516,
+            17.690240144729614,
+            17.684160470962524,
+            17.71199941635132
+          ]
+        }
+      },
+      "loom_eager_speedup": 1.1722526091228649,
+      "loom_cuda_graph_speedup": 0.9557814251693458,
+      "max_abs_error": 0.0009765625,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 74.03488159179688,
+          "median_us": 74.0444803237915,
+          "maximum_us": 74.10816192626953,
+          "samples_us": [
+            74.0444803237915,
+            74.03488159179688,
+            74.03808116912842,
+            74.10816192626953,
+            74.0556812286377
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 73.86688232421875,
+          "median_us": 73.86879920959473,
+          "maximum_us": 73.87296199798584,
+          "samples_us": [
+            73.87296199798584,
+            73.86943817138672,
+            73.86784076690674,
+            73.86879920959473,
+            73.86688232421875
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 3.8089978626861227,
+      "split_k_cuda_graph_speedup_over_legacy": 3.9903886494723357,
+      "split_k_vs_legacy_max_abs_error": 0.0
+    },
+    {
+      "batch": 1,
+      "context": 1024,
+      "minimum_sequence_length": 1024,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 24.047040939331055,
+          "median_us": 24.09183979034424,
+          "maximum_us": 24.16287899017334,
+          "samples_us": [
+            24.16287899017334,
+            24.10655975341797,
+            24.09183979034424,
+            24.047040939331055,
+            24.055039882659912
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 22.999041080474854,
+          "median_us": 23.004798889160156,
+          "maximum_us": 23.010880947113037,
+          "samples_us": [
+            23.004798889160156,
+            23.00544023513794,
+            22.999041080474854,
+            23.00447940826416,
+            23.010880947113037
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 28.584001064300537,
+          "median_us": 28.717119693756104,
+          "maximum_us": 31.164159774780273,
+          "samples_us": [
+            31.164159774780273,
+            28.717119693756104,
+            28.655359745025635,
+            28.920319080352783,
+            28.584001064300537
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 15.18239974975586,
+          "median_us": 15.186879634857178,
+          "maximum_us": 15.206079483032227,
+          "samples_us": [
+            15.184639692306519,
+            15.186879634857178,
+            15.18239974975586,
+            15.206079483032227,
+            15.202879905700684
+          ]
+        }
+      },
+      "loom_eager_speedup": 1.1919853337753652,
+      "loom_cuda_graph_speedup": 0.6601613736346648,
+      "max_abs_error": 0.0009765625,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 144.0652847290039,
+          "median_us": 144.07648086547852,
+          "maximum_us": 144.10335540771484,
+          "samples_us": [
+            144.07648086547852,
+            144.06880378723145,
+            144.08960342407227,
+            144.0652847290039,
+            144.10335540771484
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 143.74752044677734,
+          "median_us": 143.75807762145996,
+          "maximum_us": 143.79008293151855,
+          "samples_us": [
+            143.79008293151855,
+            143.75807762145996,
+            143.77471923828125,
+            143.75359535217285,
+            143.74752044677734
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 5.980302132144465,
+      "split_k_cuda_graph_speedup_over_legacy": 6.249047353732732,
+      "split_k_vs_legacy_max_abs_error": 5.960464477539063e-08
+    },
+    {
+      "batch": 2,
+      "context": 128,
+      "minimum_sequence_length": 121,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 13.744319677352905,
+          "median_us": 13.786239624023438,
+          "maximum_us": 13.813120126724243,
+          "samples_us": [
+            13.744319677352905,
+            13.813120126724243,
+            13.806400299072266,
+            13.776320219039917,
+            13.786239624023438
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 12.575680017471313,
+          "median_us": 12.585279941558838,
+          "maximum_us": 12.594239711761475,
+          "samples_us": [
+            12.594239711761475,
+            12.593920230865479,
+            12.575680017471313,
+            12.58080005645752,
+            12.585279941558838
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 22.4566388130188,
+          "median_us": 22.60960102081299,
+          "maximum_us": 22.845120429992676,
+          "samples_us": [
+            22.4566388130188,
+            22.60960102081299,
+            22.459840774536133,
+            22.733440399169922,
+            22.845120429992676
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 9.656959772109985,
+          "median_us": 9.66368019580841,
+          "maximum_us": 9.72703993320465,
+          "samples_us": [
+            9.676480293273926,
+            9.657920002937317,
+            9.656959772109985,
+            9.72703993320465,
+            9.66368019580841
+          ]
+        }
+      },
+      "loom_eager_speedup": 1.640012188778023,
+      "loom_cuda_graph_speedup": 0.767855799845756,
+      "max_abs_error": 0.001953125,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 21.729280948638916,
+          "median_us": 21.77664041519165,
+          "maximum_us": 21.95199966430664,
+          "samples_us": [
+            21.747519969940186,
+            21.729280948638916,
+            21.803839206695557,
+            21.95199966430664,
+            21.77664041519165
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 21.414079666137695,
+          "median_us": 21.41535997390747,
+          "maximum_us": 21.429760456085205,
+          "samples_us": [
+            21.414079666137695,
+            21.41535997390747,
+            21.427841186523438,
+            21.429760456085205,
+            21.41472101211548
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 1.5795924783756412,
+      "split_k_cuda_graph_speedup_over_legacy": 1.7016196757920445,
+      "split_k_vs_legacy_max_abs_error": 3.0517578125e-05
+    },
+    {
+      "batch": 2,
+      "context": 512,
+      "minimum_sequence_length": 505,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 21.60223960876465,
+          "median_us": 21.624960899353027,
+          "maximum_us": 21.63680076599121,
+          "samples_us": [
+            21.62719964981079,
+            21.63680076599121,
+            21.624960899353027,
+            21.60223960876465,
+            21.606719493865967
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 20.451200008392334,
+          "median_us": 20.458240509033203,
+          "maximum_us": 20.463359355926514,
+          "samples_us": [
+            20.451200008392334,
+            20.463359355926514,
+            20.45248031616211,
+            20.458240509033203,
+            20.458879470825195
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 22.721920013427734,
+          "median_us": 22.958080768585205,
+          "maximum_us": 23.0185604095459,
+          "samples_us": [
+            22.721920013427734,
+            22.958080768585205,
+            22.960638999938965,
+            22.840640544891357,
+            23.0185604095459
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 17.66335964202881,
+          "median_us": 17.671040296554565,
+          "maximum_us": 17.677760124206543,
+          "samples_us": [
+            17.677760124206543,
+            17.671040296554565,
+            17.66335964202881,
+            17.67199993133545,
+            17.66528010368347
+          ]
+        }
+      },
+      "loom_eager_speedup": 1.0616472730488065,
+      "loom_cuda_graph_speedup": 0.8637614895939869,
+      "max_abs_error": 0.0009765625,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 74.27135944366455,
+          "median_us": 74.28607940673828,
+          "maximum_us": 74.31839942932129,
+          "samples_us": [
+            74.28607940673828,
+            74.27135944366455,
+            74.3171215057373,
+            74.27807807922363,
+            74.31839942932129
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 73.89279842376709,
+          "median_us": 73.89567852020264,
+          "maximum_us": 73.9247989654541,
+          "samples_us": [
+            73.9247989654541,
+            73.89408111572266,
+            73.90399932861328,
+            73.89279842376709,
+            73.89567852020264
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 3.4352006346962116,
+      "split_k_cuda_graph_speedup_over_legacy": 3.6120251146512077,
+      "split_k_vs_legacy_max_abs_error": 0.00048828125
+    },
+    {
+      "batch": 2,
+      "context": 1024,
+      "minimum_sequence_length": 1017,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 29.543681144714355,
+          "median_us": 29.57535982131958,
+          "maximum_us": 29.600319862365723,
+          "samples_us": [
+            29.57535982131958,
+            29.590721130371094,
+            29.600319862365723,
+            29.543681144714355,
+            29.56831932067871
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 28.406400680541992,
+          "median_us": 28.41952085494995,
+          "maximum_us": 28.438720703125,
+          "samples_us": [
+            28.425281047821045,
+            28.409600257873535,
+            28.406400680541992,
+            28.41952085494995,
+            28.438720703125
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 28.598721027374268,
+          "median_us": 28.749120235443115,
+          "maximum_us": 28.899199962615967,
+          "samples_us": [
+            28.749120235443115,
+            28.86687994003296,
+            28.598721027374268,
+            28.899199962615967,
+            28.728959560394287
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 15.37503957748413,
+          "median_us": 15.388480424880981,
+          "maximum_us": 15.40511965751648,
+          "samples_us": [
+            15.39072036743164,
+            15.387840270996094,
+            15.37503957748413,
+            15.388480424880981,
+            15.40511965751648
+          ]
+        }
+      },
+      "loom_eager_speedup": 0.9720632448474603,
+      "loom_cuda_graph_speedup": 0.5414757167589862,
+      "max_abs_error": 0.0009765625,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 144.20479774475098,
+          "median_us": 144.2137622833252,
+          "maximum_us": 144.22304153442383,
+          "samples_us": [
+            144.22304153442383,
+            144.20479774475098,
+            144.2137622833252,
+            144.21664237976074,
+            144.2137622833252
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 143.83935928344727,
+          "median_us": 143.84832382202148,
+          "maximum_us": 143.8588809967041,
+          "samples_us": [
+            143.8588809967041,
+            143.8441562652588,
+            143.83935928344727,
+            143.85151863098145,
+            143.84832382202148
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 4.8761456548490685,
+      "split_k_cuda_graph_speedup_over_legacy": 5.061602711608236,
+      "split_k_vs_legacy_max_abs_error": 0.0001220703125
+    },
+    {
+      "batch": 4,
+      "context": 128,
+      "minimum_sequence_length": 107,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 19.394880533218384,
+          "median_us": 19.405440092086792,
+          "maximum_us": 19.438079595565796,
+          "samples_us": [
+            19.405440092086792,
+            19.438079595565796,
+            19.426560401916504,
+            19.394880533218384,
+            19.398720264434814
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 18.255679607391357,
+          "median_us": 18.264319896697998,
+          "maximum_us": 18.27232003211975,
+          "samples_us": [
+            18.264319896697998,
+            18.27232003211975,
+            18.267199993133545,
+            18.255679607391357,
+            18.264000415802002
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 22.595839500427246,
+          "median_us": 22.694079875946045,
+          "maximum_us": 23.301119804382324,
+          "samples_us": [
+            23.301119804382324,
+            22.595839500427246,
+            22.694079875946045,
+            22.597439289093018,
+            22.82815933227539
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 9.781759977340698,
+          "median_us": 9.793599843978882,
+          "maximum_us": 9.802240133285522,
+          "samples_us": [
+            9.802240133285522,
+            9.79423999786377,
+            9.784319996833801,
+            9.781759977340698,
+            9.793599843978882
+          ]
+        }
+      },
+      "loom_eager_speedup": 1.1694699923451004,
+      "loom_cuda_graph_speedup": 0.5362148658899402,
+      "max_abs_error": 0.001953125,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 21.788480281829834,
+          "median_us": 21.80959939956665,
+          "maximum_us": 21.830079555511475,
+          "samples_us": [
+            21.80959939956665,
+            21.788480281829834,
+            21.815359592437744,
+            21.805760860443115,
+            21.830079555511475
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 21.41024112701416,
+          "median_us": 21.419200897216797,
+          "maximum_us": 21.433279514312744,
+          "samples_us": [
+            21.433279514312744,
+            21.42047882080078,
+            21.41024112701416,
+            21.419200897216797,
+            21.41184091567993
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 1.1238909963428365,
+      "split_k_cuda_graph_speedup_over_legacy": 1.1727346552383355,
+      "split_k_vs_legacy_max_abs_error": 0.0001220703125
+    },
+    {
+      "batch": 4,
+      "context": 512,
+      "minimum_sequence_length": 491,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 27.110719680786133,
+          "median_us": 27.116479873657227,
+          "maximum_us": 27.142720222473145,
+          "samples_us": [
+            27.110719680786133,
+            27.142720222473145,
+            27.124478816986084,
+            27.11103916168213,
+            27.116479873657227
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 25.723841190338135,
+          "median_us": 25.733120441436768,
+          "maximum_us": 25.77728033065796,
+          "samples_us": [
+            25.731840133666992,
+            25.733120441436768,
+            25.743680000305176,
+            25.723841190338135,
+            25.77728033065796
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 22.62336015701294,
+          "median_us": 22.880640029907227,
+          "maximum_us": 23.570239543914795,
+          "samples_us": [
+            22.713279724121094,
+            22.880640029907227,
+            22.99936056137085,
+            22.62336015701294,
+            23.570239543914795
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 18.01151990890503,
+          "median_us": 18.01568031311035,
+          "maximum_us": 18.019520044326782,
+          "samples_us": [
+            18.019520044326782,
+            18.01535964012146,
+            18.01151990890503,
+            18.016639947891235,
+            18.01568031311035
+          ]
+        }
+      },
+      "loom_eager_speedup": 0.8437909395509341,
+      "loom_cuda_graph_speedup": 0.7000969957806048,
+      "max_abs_error": 0.001953125,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 74.13760185241699,
+          "median_us": 74.16639804840088,
+          "maximum_us": 74.19487953186035,
+          "samples_us": [
+            74.18623924255371,
+            74.19487953186035,
+            74.13760185241699,
+            74.16639804840088,
+            74.15872097015381
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 73.89791965484619,
+          "median_us": 73.90912055969238,
+          "maximum_us": 73.92608165740967,
+          "samples_us": [
+            73.92608165740967,
+            73.89791965484619,
+            73.92159938812256,
+            73.90912055969238,
+            73.90431880950928
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 2.7351042020926584,
+      "split_k_cuda_graph_speedup_over_legacy": 2.872139845142146,
+      "split_k_vs_legacy_max_abs_error": 0.0001220703125
+    },
+    {
+      "batch": 4,
+      "context": 1024,
+      "minimum_sequence_length": 1003,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 37.882239818573,
+          "median_us": 37.95007944107056,
+          "maximum_us": 37.96351909637451,
+          "samples_us": [
+            37.95007944107056,
+            37.96351909637451,
+            37.95903921127319,
+            37.882239818573,
+            37.92128086090088
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 36.656320095062256,
+          "median_us": 36.66208028793335,
+          "maximum_us": 36.68704032897949,
+          "samples_us": [
+            36.68704032897949,
+            36.67743921279907,
+            36.65888071060181,
+            36.66208028793335,
+            36.656320095062256
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 28.55520009994507,
+          "median_us": 28.728959560394287,
+          "maximum_us": 28.811519145965576,
+          "samples_us": [
+            28.620479106903076,
+            28.728959560394287,
+            28.735361099243164,
+            28.55520009994507,
+            28.811519145965576
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 20.72319984436035,
+          "median_us": 20.741119384765625,
+          "maximum_us": 20.768001079559326,
+          "samples_us": [
+            20.75615882873535,
+            20.741119384765625,
+            20.72319984436035,
+            20.740480422973633,
+            20.768001079559326
+          ]
+        }
+      },
+      "loom_eager_speedup": 0.7570197476135733,
+      "loom_cuda_graph_speedup": 0.5657376565069654,
+      "max_abs_error": 0.0009765625,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 144.13567543029785,
+          "median_us": 144.1494369506836,
+          "maximum_us": 144.17152404785156,
+          "samples_us": [
+            144.14688110351562,
+            144.13567543029785,
+            144.1494369506836,
+            144.15424346923828,
+            144.17152404785156
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 143.8316822052002,
+          "median_us": 143.83999824523926,
+          "maximum_us": 143.86240005493164,
+          "samples_us": [
+            143.86240005493164,
+            143.84896278381348,
+            143.8374423980713,
+            143.8316822052002,
+            143.83999824523926
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 3.798396184506569,
+      "split_k_cuda_graph_speedup_over_legacy": 3.923399793889534,
+      "split_k_vs_legacy_max_abs_error": 0.000244140625
+    },
+    {
+      "batch": 8,
+      "context": 128,
+      "minimum_sequence_length": 79,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 21.15072011947632,
+          "median_us": 21.20959997177124,
+          "maximum_us": 21.268799304962158,
+          "samples_us": [
+            21.268799304962158,
+            21.21664047241211,
+            21.20959997177124,
+            21.15072011947632,
+            21.180479526519775
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 20.17280101776123,
+          "median_us": 20.187840461730957,
+          "maximum_us": 20.197439193725586,
+          "samples_us": [
+            20.17280101776123,
+            20.187840461730957,
+            20.193281173706055,
+            20.197439193725586,
+            20.180480480194092
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 22.59999990463257,
+          "median_us": 22.72416114807129,
+          "maximum_us": 23.119680881500244,
+          "samples_us": [
+            22.72416114807129,
+            22.63200044631958,
+            22.59999990463257,
+            22.808959484100342,
+            23.119680881500244
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 10.194239616394043,
+          "median_us": 10.201599597930908,
+          "maximum_us": 10.204479694366455,
+          "samples_us": [
+            10.204479694366455,
+            10.196479558944702,
+            10.201599597930908,
+            10.194239616394043,
+            10.202239751815796
+          ]
+        }
+      },
+      "loom_eager_speedup": 1.0714092287603652,
+      "loom_cuda_graph_speedup": 0.5053338724996144,
+      "max_abs_error": 0.00390625,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 22.898240089416504,
+          "median_us": 22.926080226898193,
+          "maximum_us": 23.041601181030273,
+          "samples_us": [
+            22.926080226898193,
+            22.911040782928467,
+            23.041601181030273,
+            22.898240089416504,
+            22.93247938156128
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 22.57823944091797,
+          "median_us": 22.58784055709839,
+          "maximum_us": 22.591679096221924,
+          "samples_us": [
+            22.591679096221924,
+            22.57823944091797,
+            22.588160037994385,
+            22.58784055709839,
+            22.58143901824951
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 1.0809294026012508,
+      "split_k_cuda_graph_speedup_over_legacy": 1.1188834486738186,
+      "split_k_vs_legacy_max_abs_error": 0.001953125
+    },
+    {
+      "batch": 8,
+      "context": 512,
+      "minimum_sequence_length": 463,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 34.401280879974365,
+          "median_us": 34.44256067276001,
+          "maximum_us": 34.475200176239014,
+          "samples_us": [
+            34.475200176239014,
+            34.45215940475464,
+            34.44256067276001,
+            34.401280879974365,
+            34.4214391708374
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 33.11552047729492,
+          "median_us": 33.129920959472656,
+          "maximum_us": 33.13632011413574,
+          "samples_us": [
+            33.13503980636597,
+            33.13632011413574,
+            33.129920959472656,
+            33.12448024749756,
+            33.11552047729492
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 22.851200103759766,
+          "median_us": 22.918078899383545,
+          "maximum_us": 23.157761096954346,
+          "samples_us": [
+            22.918078899383545,
+            22.851200103759766,
+            22.904000282287598,
+            23.157761096954346,
+            22.940800189971924
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 18.178240060806274,
+          "median_us": 18.188480138778687,
+          "maximum_us": 18.19391965866089,
+          "samples_us": [
+            18.189120292663574,
+            18.19391965866089,
+            18.178240060806274,
+            18.188480138778687,
+            18.185280561447144
+          ]
+        }
+      },
+      "loom_eager_speedup": 0.6653999717712346,
+      "loom_cuda_graph_speedup": 0.549004634240703,
+      "max_abs_error": 0.001953125,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 79.56448078155518,
+          "median_us": 79.59968090057373,
+          "maximum_us": 79.67199802398682,
+          "samples_us": [
+            79.58784103393555,
+            79.59968090057373,
+            79.67199802398682,
+            79.56448078155518,
+            79.6281623840332
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 79.1542387008667,
+          "median_us": 79.20383930206299,
+          "maximum_us": 79.25824165344238,
+          "samples_us": [
+            79.19616222381592,
+            79.1542387008667,
+            79.25824165344238,
+            79.22048091888428,
+            79.20383930206299
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 2.3110848713268775,
+      "split_k_cuda_graph_speedup_over_legacy": 2.3907041432109626,
+      "split_k_vs_legacy_max_abs_error": 3.0517578125e-05
+    },
+    {
+      "batch": 8,
+      "context": 1024,
+      "minimum_sequence_length": 975,
+      "loom": {
+        "eager_dispatch_latency": {
+          "minimum_us": 63.29023838043213,
+          "median_us": 63.623361587524414,
+          "maximum_us": 63.787522315979004,
+          "samples_us": [
+            63.53343963623047,
+            63.623361587524414,
+            63.71744155883789,
+            63.29023838043213,
+            63.787522315979004
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 61.35007858276367,
+          "median_us": 61.580801010131836,
+          "maximum_us": 61.67391777038574,
+          "samples_us": [
+            61.67391777038574,
+            61.35007858276367,
+            61.59743785858154,
+            61.580801010131836,
+            61.53151988983154
+          ]
+        }
+      },
+      "vllm_flash_attention": {
+        "eager_dispatch_latency": {
+          "minimum_us": 31.46752119064331,
+          "median_us": 31.512320041656494,
+          "maximum_us": 31.703360080718994,
+          "samples_us": [
+            31.548800468444824,
+            31.502079963684082,
+            31.512320041656494,
+            31.46752119064331,
+            31.703360080718994
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 30.403521060943604,
+          "median_us": 30.417919158935547,
+          "maximum_us": 30.445120334625244,
+          "samples_us": [
+            30.435519218444824,
+            30.417919158935547,
+            30.403521060943604,
+            30.445120334625244,
+            30.411200523376465
+          ]
+        }
+      },
+      "loom_eager_speedup": 0.49529479825277867,
+      "loom_cuda_graph_speedup": 0.4939513397029524,
+      "max_abs_error": 0.0009765625,
+      "loom_legacy": {
+        "eager_dispatch_latency": {
+          "minimum_us": 154.88320350646973,
+          "median_us": 155.47136306762695,
+          "maximum_us": 156.1507225036621,
+          "samples_us": [
+            155.47136306762695,
+            154.88320350646973,
+            155.5516815185547,
+            156.1507225036621,
+            155.46624183654785
+          ]
+        },
+        "cuda_graph_replay_latency": {
+          "minimum_us": 154.5740795135498,
+          "median_us": 155.40672302246094,
+          "maximum_us": 155.72416305541992,
+          "samples_us": [
+            155.40672302246094,
+            155.4873561859131,
+            154.5740795135498,
+            155.72416305541992,
+            155.24255752563477
+          ]
+        }
+      },
+      "split_k_eager_speedup_over_legacy": 2.443620695108203,
+      "split_k_cuda_graph_speedup_over_legacy": 2.523622955097515,
+      "split_k_vs_legacy_max_abs_error": 0.000244140625
+    }
+  ]
+}

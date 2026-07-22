@@ -125,6 +125,16 @@ CASES = [
     (2, 14, 2, 64, 64, 16, [17, 32]),
     # Reach the partial four-head packed-grid threshold with the same tail.
     (64, 14, 2, 64, 64, 16, list(range(17, 33)) * 4),
+    # Long-context split-K with the common 4:1 GQA mapping.
+    (1, 32, 8, 128, 128, 16, [128]),
+    # Stable LSE merge over ragged split-K partials.
+    (4, 32, 8, 128, 128, 16, [512, 501, 489, 477]),
+    # High-workload four-query-head packing and vLLM's larger cache block.
+    (8, 32, 8, 128, 128, 32, list(range(491, 499))),
+    # Odd 7:1 GQA exercises the guarded split-K tail group.
+    (2, 14, 2, 128, 128, 16, [129, 256]),
+    # MHA uses one active head in each two-head split-K group.
+    (1, 8, 8, 128, 128, 16, [257]),
 ]
 
 
