@@ -1,4 +1,6 @@
-use crate::backend::CudaBackend;
+//! Safe CUDA dispatch for activation and output-quantization contracts.
+
+use crate::cuda_backend::CudaBackend;
 use crate::runtime::{
     loom_status_result, CudaDeviceRead, CudaDeviceWrite, CudaStreamHandle, DeviceSlice,
 };

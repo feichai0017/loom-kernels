@@ -720,20 +720,20 @@ pub extern "C" fn loom_cuda_bridge_reset_launch_count(operation: u32) -> c_int {
     })
 }
 
-mod activation;
-mod attention;
-mod logits;
-mod norm;
-mod rope_kv;
-mod sampling;
-mod speculative;
+mod activation_bridge;
+mod attention_bridge;
+mod logits_bridge;
+mod norm_bridge;
+mod rope_kv_bridge;
+mod sampling_bridge;
+mod speculative_bridge;
 #[cfg(test)]
 mod tests;
 
-pub use activation::*;
-pub use attention::*;
-pub use logits::*;
-pub use norm::*;
-pub use rope_kv::*;
-pub use sampling::*;
-pub use speculative::*;
+pub use activation_bridge::*;
+pub use attention_bridge::*;
+pub use logits_bridge::*;
+pub use norm_bridge::*;
+pub use rope_kv_bridge::*;
+pub use sampling_bridge::*;
+pub use speculative_bridge::*;

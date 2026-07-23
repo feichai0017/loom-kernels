@@ -1,3 +1,5 @@
+//! Concrete CUDA backend and capability admission for Loom operator contracts.
+
 use crate::runtime::{CudaStream, CudaStreamHandle};
 use crate::CudaExecutorError;
 use loom_kernels::{Backend, DType, OperatorSpec, Support};
@@ -107,7 +109,9 @@ impl<S: CudaStreamHandle> Backend for CudaBackend<S> {
                 Support::Unsupported("CUDA min-p filtering supports F32, FP16, and BF16 logits")
             }
             OperatorSpec::GreedySpeculativeVerify(_) => Support::Supported,
-            OperatorSpec::PagedDecodeAttention(spec) if crate::attention::supports_spec(*spec) => {
+            OperatorSpec::PagedDecodeAttention(spec)
+                if crate::attention_dispatch::supports_spec(*spec) =>
+            {
                 Support::Supported
             }
             OperatorSpec::PagedDecodeAttention(spec)
@@ -118,7 +122,8 @@ impl<S: CudaStreamHandle> Backend for CudaBackend<S> {
                 )
             }
             OperatorSpec::PagedDecodeAttention(spec)
-                if spec.max_sequence_length() > crate::attention::PAGED_DECODE_MAX_CONTEXT =>
+                if spec.max_sequence_length()
+                    > crate::attention_dispatch::PAGED_DECODE_MAX_CONTEXT =>
             {
                 Support::Unsupported(
                     "CUDA paged decode attention supports at most 1024 context tokens",

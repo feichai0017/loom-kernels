@@ -1,3 +1,5 @@
+//! Checked C bridge entrypoints for logits processing.
+
 use super::*;
 
 #[allow(clippy::too_many_arguments)]

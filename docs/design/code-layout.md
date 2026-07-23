@@ -37,23 +37,34 @@ adapters do not duplicate Rust contract validation.
 ## Domain Alignment
 
 The same domain vocabulary is used across Rust, the bridge, PyTorch, tests,
-and vLLM:
+and vLLM, while a filename suffix identifies each private Rust layer:
 
-| Domain | Contract and oracle | Safe CUDA | Rust bridge | PyTorch dispatcher | vLLM adapter |
-| --- | --- | --- | --- | --- | --- |
-| normalization | `norm.rs` | `norm.rs` | `cuda/norm.rs` | `norm.cpp` | IR registration in `vllm/__init__.py` |
-| activation and output quantization | `activation.rs` | `activation.rs` | `cuda/activation.rs` | `activation.cpp` | `vllm/activation.py` |
-| logits processing | `logits.rs` | `logits.rs` | `cuda/logits.rs` | `logits.cpp` | `vllm/logits.py` |
-| sampling and log probabilities | `sampling.rs` | `sampling.rs` | `cuda/sampling.rs` | `sampling.cpp` | `vllm/sampling.py` |
-| speculative decoding | `speculative.rs` | `speculative.rs` | `cuda/speculative.rs` | `speculative.cpp` | `vllm/speculative.py` |
-| RoPE and KV write | `rope_kv.rs` | `rope_kv.rs` | `cuda/rope_kv.rs` | `rope_kv.cpp` | `vllm/rope_kv.py` |
-| decode attention | `attention.rs` | `attention.rs` | `cuda/attention.rs` | `attention.cpp` | `vllm/attention.py` |
+- `<domain>.rs` is the public contract and CPU oracle;
+- `<domain>_dispatch.rs` is safe CUDA validation and launch dispatch;
+- `<domain>_bridge.rs` is the checked C entrypoint over borrowed storage;
+- CUDA files use the concrete algorithm or fusion name.
+
+This preserves vertical alignment without leaving several editor tabs,
+compiler diagnostics, or review comments named only `norm.rs`. Every private
+layer file also starts with a module comment that states its responsibility.
+
+| Domain | Contract and oracle | Safe CUDA dispatch | Checked Rust bridge | Raw CUDA | PyTorch dispatcher | vLLM adapter |
+| --- | --- | --- | --- | --- | --- | --- |
+| normalization | `norm.rs` | `norm_dispatch.rs` | `cuda/norm_bridge.rs` | `rms_norm.cu` · `add_rms_norm.cu` · `rms_norm_quant.cu` | `norm.cpp` | IR registration in `vllm/__init__.py` |
+| activation and output quantization | `activation.rs` | `activation_dispatch.rs` | `cuda/activation_bridge.rs` | `silu_and_mul.cu` · `silu_and_mul_quant.cu` | `activation.cpp` | `vllm/activation.py` |
+| logits processing | `logits.rs` | `logits_dispatch.rs` | `cuda/logits_bridge.rs` | `min_p.cu` | `logits.cpp` | `vllm/logits.py` |
+| sampling and log probabilities | `sampling.rs` | `sampling_dispatch.rs` | `cuda/sampling_bridge.rs` | `greedy_sample.cu` | `sampling.cpp` | `vllm/sampling.py` |
+| speculative decoding | `speculative.rs` | `speculative_dispatch.rs` | `cuda/speculative_bridge.rs` | `greedy_speculative_verify.cu` | `speculative.cpp` | `vllm/speculative.py` |
+| RoPE and KV write | `rope_kv.rs` | `rope_kv_dispatch.rs` | `cuda/rope_kv_bridge.rs` | `rope_paged_kv.cu` | `rope_kv.cpp` | `vllm/rope_kv.py` |
+| decode attention | `attention.rs` | `attention_dispatch.rs` | `cuda/attention_bridge.rs` | `paged_decode_attention.cu` | `attention.cpp` | `vllm/attention.py` |
 
 Cross-domain infrastructure has explicit names:
 
 - `contract.rs`, `element.rs`, and `quantization.rs` define shared public
   invariants;
-- `backend.rs`, `runtime.rs`, and `layout.rs` own safe CUDA infrastructure;
+- `backend.rs` defines the public backend capability interface;
+- `cuda_backend.rs`, `runtime.rs`, and `layout.rs` own concrete safe CUDA
+  infrastructure;
 - `cuda/mod.rs` owns shared bridge dtype dispatch, borrowed-region validation,
   status mapping, and launch telemetry;
 - `python/csrc/common.h` owns only Stable ABI types and shared tensor/stream
@@ -81,8 +92,10 @@ separate tightly coupled kernels.
 ## Rules for New Work
 
 1. Add or extend the public spec and CPU oracle in `loom-kernels`.
-2. Add the matching safe backend method in the same domain in `loom-cuda`.
-3. Add one checked bridge entrypoint in the matching `cuda/<domain>.rs`.
+2. Add the matching safe backend method in
+   `loom-cuda/src/<domain>_dispatch.rs`.
+3. Add one checked bridge entrypoint in
+   `loom-cuda-bridge/src/cuda/<domain>_bridge.rs`.
 4. Add the internal launch declaration and the cohesive CUDA implementation.
 5. If PyTorch consumes it, add the schema once in `torch_ops.cpp` and the
    wrapper plus dispatch registration in `<domain>.cpp`.

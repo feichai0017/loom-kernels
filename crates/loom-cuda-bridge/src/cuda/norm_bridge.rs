@@ -1,3 +1,5 @@
+//! Checked C bridge entrypoints for normalization.
+
 use super::*;
 
 unsafe fn launch_rms_norm<T: Scalar>(

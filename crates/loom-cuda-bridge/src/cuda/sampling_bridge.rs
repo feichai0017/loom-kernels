@@ -1,3 +1,5 @@
+//! Checked C bridge entrypoints for token selection and logprobs.
+
 use super::*;
 
 #[allow(clippy::too_many_arguments)]

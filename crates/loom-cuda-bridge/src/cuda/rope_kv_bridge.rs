@@ -1,3 +1,5 @@
+//! Checked C bridge entrypoints for rotary embedding and paged-KV writes.
+
 use super::*;
 
 unsafe fn launch_rope_paged_kv_write<T: Scalar>(

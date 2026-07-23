@@ -1,3 +1,5 @@
+//! Checked C bridge entrypoints for activation and output quantization.
+
 use super::*;
 
 unsafe fn launch_silu_and_mul<T: Scalar>(

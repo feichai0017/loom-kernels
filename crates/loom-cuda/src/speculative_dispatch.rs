@@ -1,4 +1,6 @@
-use crate::backend::CudaBackend;
+//! Safe CUDA dispatch for speculative-verification contracts.
+
+use crate::cuda_backend::CudaBackend;
 use crate::runtime::{loom_status_result, CudaDeviceRead, CudaDeviceWrite, CudaStreamHandle};
 use crate::CudaExecutorError;
 use loom_kernels::GreedySpeculativeVerifySpec;

@@ -25,6 +25,8 @@ spelling; Python package metadata uses the equivalent PEP 440 spelling.
 - removed `LOOM_KERNELS_TORCH_LIBRARY`: installed wheels load only their
   package-local native pair, while editable source checkouts use repository
   `build/`.
+- renamed private Rust CUDA modules to `<domain>_dispatch.rs` and checked C
+  modules to `<domain>_bridge.rs`; no legacy source-path aliases remain.
 
 ### Added
 

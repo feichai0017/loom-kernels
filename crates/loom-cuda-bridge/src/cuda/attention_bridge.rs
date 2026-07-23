@@ -1,3 +1,5 @@
+//! Checked C bridge entrypoints for paged decode attention.
+
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
