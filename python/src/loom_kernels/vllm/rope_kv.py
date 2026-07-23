@@ -167,8 +167,12 @@ def configure_vllm_rope_paged_kv(
     else:
         raise TypeError("compilation_config must be a dict or CompilationConfig")
 
-    if "+rotary_embedding" not in configured.custom_ops:
-        configured.custom_ops.append("+rotary_embedding")
+    # vLLM's FP8 FlashAttention path quantizes Q after RoPE. Keep both
+    # operations opaque so its official RopeStaticQQuantKVCachePattern can
+    # match RoPE + static-Q quant + the paged-KV update as one unit.
+    for custom_op in ("+rotary_embedding", "+quant_fp8"):
+        if custom_op not in configured.custom_ops:
+            configured.custom_ops.append(custom_op)
     if configured.splitting_ops is None:
         configured.splitting_ops = []
     configured.pass_config.fuse_rope_kvcache = True

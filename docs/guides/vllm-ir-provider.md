@@ -243,12 +243,14 @@ engine = LLM(
 )
 ```
 
-The helper explicitly enables `+rotary_embedding`, keeps the cache update in
-the compiled graph, registers Loom on the FlashAttention/FlashInfer backend
-classes, and enables fusion only through 256 tokens by default. The threshold
-is intentional: the H20 advantage is largest for decode-sized batches and
-narrows as long prefill becomes compute-bound. The adapter targets vLLM's
-version-specific compiler contract and native F32/FP16/BF16 cache dtype.
+The helper explicitly enables `+rotary_embedding` and `+quant_fp8`, keeps the
+cache update in the compiled graph, registers Loom on the
+FlashAttention/FlashInfer backend classes, and enables fusion only through 256
+tokens by default. Keeping static FP8 query quant opaque is required for the
+FlashAttention FP8 graph to match the official fusion pass. The threshold is
+intentional: the H20 advantage is largest for decode-sized batches and narrows
+as long prefill becomes compute-bound. The adapter targets vLLM's
+version-specific compiler contract and native or static FP8 E4M3 cache dtype.
 
 To enable the measured paged-decode route, opt in before vLLM constructs the
 engine:

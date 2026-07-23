@@ -187,10 +187,10 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     )
     from loom_kernels.vllm import configure_vllm_rope_paged_kv, provider_metadata
 
-    # Keep graph partitioning and rotary dispatch identical on both sides. The
-    # only difference is whether vLLM's official fusion pass is enabled.
+    # Keep graph partitioning, rotary dispatch, and static FP8 query quant
+    # identical on both sides; only Loom enables the official fusion pass.
     compilation_config = CompilationConfig(
-        custom_ops=["+rotary_embedding"], splitting_ops=[]
+        custom_ops=["+rotary_embedding", "+quant_fp8"], splitting_ops=[]
     )
     if provider == "loom":
         compilation_config = configure_vllm_rope_paged_kv(

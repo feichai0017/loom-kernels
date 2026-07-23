@@ -326,6 +326,7 @@ def test_configures_vllm_rope_paged_kv_fusion():
     assert config.pass_config.rope_kvcache_fusion_max_token_num == 128
     assert config.splitting_ops == []
     assert "+rotary_embedding" in config.custom_ops
+    assert "+quant_fp8" in config.custom_ops
     assert FlashAttentionImpl.fused_rope_kvcache_supported.__module__ == (
         "loom_kernels.vllm.rope_kv"
     )
