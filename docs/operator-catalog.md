@@ -7,9 +7,14 @@ layout knowledge, quantization, or launch reduction can improve a measured
 workload.
 
 The catalog deliberately does not promise handwritten replacements for every
-pointwise expression. Dense GEMM should normally use cuBLASLt, CUTLASS, or an
-engine-selected vendor implementation; Loom owns the Rust contract, dispatch,
-valuable epilogues, and evidence around it.
+pointwise expression. Dense, quantized, sparse, and grouped GEMM always use
+cuBLASLt, CUTLASS, FlashInfer, or an engine-selected vendor implementation.
+Loom owns only memory-bound preparation, movement, fusion, and epilogues around
+that matrix core.
+
+Catalog admission requires a memory/layout/scheduling bottleneck, a named
+engine gap, and a real model or serving exit gate. A plausible CUDA kernel or
+isolated microbenchmark is not sufficient.
 
 ## Status Legend
 
@@ -19,7 +24,7 @@ valuable epilogues, and evidence around it.
 | next | admitted to the immediate implementation queue |
 | planned | useful surface with a named engine consumer, ordered after `next` |
 | profile-gated | implemented only when a real workload shows material cost |
-| vendor-backed | Loom exposes or fuses the boundary but does not reimplement the base primitive |
+| vendor-backed | the engine/vendor owns the base primitive; Loom may expose only an adjacent memory-bound boundary |
 
 ## Normalization And Quantization
 
@@ -30,8 +35,8 @@ valuable epilogues, and evidence around it.
 | RMSNorm+dynamic per-token FP8 | P0 | supported | normalization plus quantized GEMM input |
 | RMSNorm+dynamic INT8 | P0 | next | normalization plus INT8 GEMM input |
 | LayerNorm and Add+LayerNorm | P2 | profile-gated | models that actually use LayerNorm |
-| static/dynamic per-token, per-channel, and per-block quantization | P0/P1 | planned | FP8/INT8/INT4 scale production and packing |
-| dequantize, requantize, and scale conversion | P1 | planned | layout-aware transitions between kernels |
+| static/dynamic per-token, per-channel, and per-block quantization | P0/P1 | planned | FP8/INT8/INT4 scale production and packing around vendor GEMM |
+| dequantize, requantize, pack/unpack, and scale conversion | P1 | planned | layout-aware transitions between vendor kernels |
 
 ## MLP Activations And Linear Epilogues
 
@@ -42,8 +47,8 @@ valuable epilogues, and evidence around it.
 | SiLU-and-Mul+dynamic INT8 | P0 | next | activation directly into INT8 down projection |
 | GELU, GELU-tanh, GELU-and-Mul, GeGLU, ReGLU | P1 | planned | model-specific gated MLPs |
 | bias+activation and bias+gated activation | P1 | planned | GEMM output epilogues |
-| GEMM+bias+activation/quantization | P0 | vendor-backed | cuBLASLt/CUTLASS base GEMM with Loom-owned epilogue |
-| quantized linear and grouped linear dispatch | P1 | vendor-backed | engine-selected FP8/INT8/INT4 matrix core |
+| vendor GEMM handoff+bias+activation/quantization | P0 | vendor-backed | unchanged cuBLASLt/CUTLASS matrix core with a measured Loom pre/post boundary |
+| quantized linear and grouped linear | — | vendor-backed | explicitly engine-owned FP8/INT8/INT4 matrix core; Loom does not implement it |
 
 ## Embedding, Position, And KV Cache
 
@@ -51,25 +56,36 @@ valuable epilogues, and evidence around it.
 | --- | --- | --- | --- |
 | NeoX and interleaved RoPE, partial rotary dimensions | P0 | next | in-place Q/K position encoding; currently exposed through the fused cache-write path |
 | RoPE+paged-KV write | P0 | supported | position encoding without materializing another K pass |
-| paged-KV reshape/store/append | P0 | planned | engine tensor to cache layout |
-| KV block copy, swap, gather, scatter, compact, and remap | P0 | planned | cache movement and prefix reuse |
-| FP8/INT8 KV quantize/dequantize with scale update | P0 | planned | compressed cache read/write |
+| paged-KV reshape/store/append | P0 | next | engine tensor to cache layout |
+| KV block copy, swap, gather, scatter, compact, and remap | P0 | next | prefix reuse, preemption, beam movement, and cache compaction |
+| FP8 KV quantize/dequantize with scale update | P0 | next | compressed cache read/write with explicit per-head or per-block scales |
+| INT8 KV quantize/dequantize with scale update | P1 | planned | admitted only by a named engine/model cache contract |
 | embedding gather and parallel-vocabulary embedding | P1 | profile-gated | lookup plus dtype/layout conversion |
 
 ## Logits, Sampling, And Log Probabilities
 
 | Operator | Priority | State | Intended fusion boundary |
 | --- | --- | --- | --- |
-| logits bias, temperature, masks, and bad-word suppression | P0 | planned | one logits preprocessing pass |
-| repetition, presence, and frequency penalties | P0 | planned | sparse history-aware update |
+| logits bias, temperature, masks, and bad-word suppression | P0 | next | one logits preprocessing pass |
+| repetition, presence, and frequency penalties | P0 | next | sparse history-aware update |
 | greedy argmax+sampled-token raw logprob | P0 | supported | one-pass selection, normalization, gather, and tie-aware rank |
 | general selected-token raw logprob+rank | P0 | supported | engine-owned sampling followed by one-pass normalization and tie-aware rank |
 | in-place min-p filtering | P0 | supported | row-max threshold without probability or mask tensors; vLLM route is H20 shape-gated |
-| deterministic RNG sampling | P0 | planned | token selection without host round trips |
-| top-k, top-p, and renormalization | P0 | planned | fused candidate filtering and sampling |
-| top-k logprobs | P0 | planned | avoid full-vocabulary probability tensors when multiple candidates are returned |
+| deterministic counter-based RNG sampling | P0 | next | seeded token selection without host round trips |
+| top-k, top-p, and renormalization | P0 | next | fused candidate filtering and sampling |
+| top-k logprobs | P0 | next | avoid full-vocabulary probability tensors when multiple candidates are returned |
 | sharded-vocabulary top-k/logsumexp merge | P1 | planned | tensor-parallel token selection |
 | structured-output bitmask application | P1 | profile-gated | grammar mask plus logits processing |
+
+## Speculative Decoding Support
+
+| Operator | Priority | State | Intended fusion boundary |
+| --- | --- | --- | --- |
+| batched draft-verification metadata and tree/branch mask construction | P0 | next | prepare one vendor-attention verification call without host metadata loops |
+| deterministic draft-token acceptance/rejection | P0 | next | bulk probability comparison with explicit RNG state |
+| accepted-token and bonus-token compaction | P0 | next | emit the next decode tokens without device-to-host control flow |
+| speculative KV slot commit, rollback, and remap | P0 | planned | caller-owned cache metadata movement when an engine exposes the boundary |
+| draft/target model GEMM and verification attention | — | vendor-backed | engine-selected matrix and attention backends; never reimplemented by Loom |
 
 ## Mixture Of Experts
 
@@ -78,7 +94,7 @@ valuable epilogues, and evidence around it.
 | softmax/sigmoid top-k routing and grouped top-k | P1 | planned | score, select, renormalize, and expert map |
 | expert histogram, prefix sum, token permutation, and alignment | P1 | planned | dispatch preparation without host work |
 | inverse permutation and weighted expert reduction | P1 | planned | combine routed expert outputs |
-| grouped GEMM and quantized grouped GEMM | P1 | vendor-backed | vendor matrix core plus stable Rust dispatch |
+| grouped GEMM and quantized grouped GEMM | — | vendor-backed | explicitly engine-owned vendor matrix core fed by Loom-permuted buffers |
 | shared-expert gate and routed/shared output fusion | P1 | planned | reduce temporary expert tensors |
 
 ## Attention
@@ -91,7 +107,7 @@ valuable epilogues, and evidence around it.
 | distributed split-KV/LSE merge | P1 | planned | context-parallel attention after transport qualification |
 | sliding-window, ALiBi, soft-cap, and causal variants | P1 | planned | standard attention contract options |
 | MLA paged decode and latent-cache transforms | P1 | planned | DeepSeek-style inference path |
-| speculative/tree attention masks | P2 | profile-gated | engine-specific speculative decoding |
+| speculative verification attention | — | vendor-backed | engine-selected attention consumes Loom-prepared verification metadata |
 
 ## Communication-Aware Operators
 
@@ -114,18 +130,23 @@ the boundary or an isolated implementation is measurably useful.
 
 ## Implementation Order
 
-1. Extend the shape-gated min-p and proven selected-token paths with fused
-   logits preprocessing, top-k/top-p, and deterministic RNG sampling where
-   profiling shows additional value.
-2. Optimize the real-engine RoPE+paged-KV boundary only where profiling shows
-   TPOT materiality; keep its current parity result explicit.
-3. Add MoE routing/movement before attempting a full grouped-GEMM stack.
-4. Broaden paged decode beyond the qualified 32/8 head geometry and close the
-   remaining 1,024-token split-K gap; retain the measured short route and
-   explicit FA3 fallback for long contexts where it remains faster.
-5. Add INT8 fused boundaries only for a named engine/model consumer.
-6. Attempt communication-aware fusion only after single-GPU operators and
-   real tensor-parallel workloads are reproducible.
+1. After K0.7 native wheels, implement speculative verification metadata,
+   deterministic accept/reject, and accepted-token compaction for one named
+   draft/target engine path.
+2. Add FP8 KV-cache compression with explicit scales and prove cache bytes,
+   admitted context/batch, quality, and TPOT together.
+3. Complete the sampling tail with fused preprocessing, penalties, top-k/top-p,
+   renormalization, deterministic RNG, and top-k logprobs.
+4. Add KV block movement for a real prefix-cache, preemption, or compaction
+   call site.
+5. Fill quantization scale/pack/layout gaps only around an unchanged vendor
+   GEMM path.
+6. Add MoE routing, histogram/prefix sum, permutation, and combine; grouped
+   GEMM remains entirely engine/vendor-owned.
+7. Build the engine-neutral Rust decode proof after one new feature reaches an
+   engine.
+8. Broaden paged decode or communication-aware fusion only when profiling and
+   reproducible engine workloads justify it.
 
 Every item advances independently through the admission gates in the
 [operator-library design](design/operator-library.md). Catalog membership is a

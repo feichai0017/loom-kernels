@@ -68,8 +68,9 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
       </div>
       <p>
         Loom admits operators where layout knowledge, quantization, or launch
-        reduction matters to an inference engine. Dense GEMM stays with vendor
-        libraries; Loom owns the contracts and useful epilogues around it.
+        reduction matters to an inference engine. Dense, quantized, sparse, and
+        grouped GEMM always stay with vendor libraries; Loom owns only the
+        measured memory-bound work around them.
       </p>
     </header>
 
@@ -172,15 +173,16 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
         <h2>Build where engines pay.</h2>
       </div>
       <p>
-        The roadmap follows memory traffic and launch count—not a checklist of
-        every tensor expression. Each family must earn its public surface.
+        After native-wheel distribution, the roadmap starts with speculative
+        decoding, KV-cache compression, and the complete sampling tail. Each
+        family must earn its public surface in a real engine.
       </p>
     </header>
 
     <div class="roadmap-grid">
-      {nextOperators.map((operator, index) => (
+      {nextOperators.map((operator) => (
         <article class="roadmap-card">
-          <span class="card-index">K{index + 4}</span>
+          <span class="card-index">{operator.milestone}</span>
           <h3>{operator.name}</h3>
           <p>{operator.reason}</p>
         </article>

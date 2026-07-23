@@ -51,11 +51,18 @@ import { nextOperators, supportedOperators } from "../../data/site";
       <h2>Implementation policy</h2>
       <ul>
         <li>Handwrite memory-bound and fusion-sensitive kernels.</li>
-        <li>Use cuBLASLt, CUTLASS, or an engine-selected vendor path for base GEMM.</li>
+        <li>Never implement dense, quantized, sparse, or grouped GEMM; keep the matrix core engine/vendor-owned.</li>
         <li>Key tuning by device, dtype, shape, layout, and alignment.</li>
         <li>Expose one stable Rust contract across backend implementations.</li>
         <li>Do not turn incidental layout helpers into public APIs without a consumer.</li>
       </ul>
+
+      <h2>Three admission questions</h2>
+      <ol>
+        <li>Is the cost memory traffic, launch overhead, layout conversion, or scheduling metadata?</li>
+        <li>Does a named inference-engine path leave a real boundary Loom can enter without copies?</li>
+        <li>Can a real model or serving workload prove latency, memory, throughput, or goodput value?</li>
+      </ol>
 
       <h2>Six independent gates</h2>
       <ol>

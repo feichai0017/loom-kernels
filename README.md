@@ -37,8 +37,10 @@ GEMM libraries.
 | Integration | Current-stream PyTorch operators and narrow vLLM 0.24/0.25 registration points |
 | Evidence | Reproducible correctness, named-baseline, CUDA Graph, and engine gates |
 
-Dense GEMM stays with cuBLASLt, CUTLASS, or the engine-selected backend. Loom
-targets the memory-bound work and useful epilogues around it.
+Dense, quantized, sparse, and grouped GEMM always stay with cuBLASLt, CUTLASS,
+FlashInfer, or the engine-selected backend. Loom targets the memory-bound work,
+layout/scheduling metadata, and useful fusion boundaries around that matrix
+core; it will not implement a competing GEMM.
 
 ## Supported operator paths
 
@@ -53,6 +55,23 @@ targets the memory-bound work and useful epilogues around it.
 The [operator catalog](docs/operator-catalog.md) separates `supported`, `next`,
 `planned`, `profile-gated`, and `vendor-backed` work. Catalog membership alone
 is never a performance claim.
+
+## Next value program
+
+K0.7 native-wheel distribution is the current release gate. The ordered feature
+program after it is:
+
+| Order | Direction | First proof |
+| --- | --- | --- |
+| 1 | Speculative decoding support | batched verification metadata, deterministic accept/reject, token compaction, and a real draft/target engine win |
+| 2 | FP8 KV-cache compression | lower cache bytes and a larger admitted context or batch size with quality and TPOT reported |
+| 3 | Complete sampling tail | penalties, top-k/top-p, deterministic RNG, and top-k logprobs through one engine path |
+| 4 | KV-cache movement and quantization plumbing | measured prefix/preemption movement plus scale/pack/layout work around unchanged vendor GEMM |
+| 5 | MoE routing and movement | routing, histogram/prefix sum, permutation, and combine around vendor grouped GEMM |
+| 6 | Minimal Rust decode proof | one zero-copy decode step over borrowed tensors and streams, without becoming an inference engine |
+
+The detailed contracts and exit criteria live in the
+[roadmap](docs/roadmap.md).
 
 ## Architecture
 

@@ -218,7 +218,9 @@ are equivalent. It does not close engine integration or end-to-end value.
 ## Implementation Policy
 
 - Handwrite memory-bound and fusion-sensitive kernels.
-- Reuse cuBLAS/cuBLASLt or equivalent for base GEMM and own valuable epilogues.
+- Never implement dense, quantized, sparse, or grouped GEMM; use the
+  engine-selected vendor backend and own only measured memory-bound work around
+  it.
 - Keep tuning decisions keyed by device, dtype, layout, and shape.
 - Preserve one stable Rust contract across CUDA implementations.
 - Add another backend only after a real consumer and benchmark justify it.

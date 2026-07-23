@@ -72,16 +72,34 @@ export const supportedOperators = [
 
 export const nextOperators = [
   {
-    name: "Loom-owned sampling",
-    reason: "Build from shape-gated Min-P into top-k/top-p and deterministic RNG where profiling pays.",
+    milestone: "K4.5 · P0",
+    name: "Speculative decoding",
+    reason: "Prepare batched verification metadata, deterministic accept/reject, and token compaction around vendor attention and GEMM.",
   },
   {
+    milestone: "K3 · P0",
+    name: "KV-cache compression + movement",
+    reason: "Add FP8 cache scales and scheduler-facing block movement that improve admitted context, batch size, or prefix/preemption cost.",
+  },
+  {
+    milestone: "K4 · P0",
+    name: "Complete sampling tail",
+    reason: "Own penalties, top-k/top-p, deterministic RNG, and top-k logprobs without host round trips.",
+  },
+  {
+    milestone: "K2.5 · P1",
+    name: "Quantization plumbing",
+    reason: "Remove scale, pack/unpack, dequant/requant, and layout passes around an unchanged vendor GEMM.",
+  },
+  {
+    milestone: "K5 · P1",
     name: "MoE routing + movement",
-    reason: "Own the launch-heavy path around vendor grouped GEMM.",
+    reason: "Own routing, histogram/prefix sum, permutation, and combine while grouped GEMM stays vendor-owned.",
   },
   {
-    name: "Paged decode breadth",
-    reason: "Close the 1,024-token FA3 gap and qualify broader heads without widening from microbenchmarks alone.",
+    milestone: "K8 · Proof",
+    name: "Rust decode step",
+    reason: "Prove zero-copy engine-neutral orchestration over borrowed tensors and streams without building an inference engine.",
   },
 ];
 

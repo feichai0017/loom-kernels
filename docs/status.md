@@ -325,6 +325,14 @@ FA3 for the engine's 128-1,024-token path.
 - Min-P real-model invocation and end-to-end serving benefit;
 - Loom-owned logits preprocessing, top-k/top-p, stochastic sampling, and
   general top-k logprob integration;
+- speculative draft verification, acceptance/rejection, token compaction, and
+  an end-to-end draft/target engine win;
+- FP8/INT8 KV-cache compression with measured cache bytes, quality, admitted
+  context/batch, and TPOT;
+- prefix-cache/preemption KV movement and compaction in a real scheduler path;
+- MoE routing/permutation/combine benefit around an unchanged vendor grouped
+  GEMM;
+- an engine-neutral zero-copy Rust decode-step proof;
 - a paged decode-attention pretrained-model route that passes token/quality and
   end-to-end gates; the attempted Qwen2.5 `14/2`, D64 route was rejected;
 - an FA3-competitive paged-decode kernel at 1,024 tokens and batches above one;

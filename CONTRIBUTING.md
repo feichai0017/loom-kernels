@@ -16,9 +16,10 @@ writing a large implementation. Name:
 - the workload where the boundary is material;
 - the correctness and performance exit gates.
 
-Dense GEMM implementations are normally vendor-backed. Loom is most useful for
-memory-bound operators, layout transitions, quantization, decode-tail work, and
-fusions around vendor matrix kernels.
+Dense, quantized, sparse, and grouped GEMM implementations are out of scope and
+must remain engine/vendor-owned. Loom is for memory-bound operators, layout and
+scheduling transitions, quantization plumbing, decode-tail work, and measured
+fusions around an unchanged vendor matrix kernel.
 
 ## Development loop
 

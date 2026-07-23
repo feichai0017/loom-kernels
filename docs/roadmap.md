@@ -1,5 +1,39 @@
 # Roadmap
 
+## Permanent Product Boundary
+
+Loom does not implement matrix multiplication. Dense, quantized, sparse, and
+grouped GEMM belong to cuBLASLt, CUTLASS, FlashInfer, or another
+engine-selected vendor backend. Loom may prepare or consume their buffers and
+fuse memory-bound work immediately around them, but it will not hide a second
+matrix core behind a Loom API.
+
+A new direction enters this roadmap only when all three statements are true:
+
+1. the cost is memory traffic, launch overhead, layout conversion, or scheduling
+   metadata rather than matrix arithmetic;
+2. a named inference-engine path has a real gap that Loom can enter without
+   copying tensors into a private format;
+3. a real model or serving workload can close an engine, memory, or end-to-end
+   exit gate.
+
+Microbenchmark opportunity alone is not admission.
+
+## Execution Order After K0.7
+
+K0.7 native-wheel distribution remains the current blocking release track.
+After it closes, new feature work follows this order:
+
+| Order | Track | First deliverable | Required system proof |
+| --- | --- | --- | --- |
+| 1 | Speculative decoding support | batched verification metadata plus deterministic accept/reject and token compaction | a named draft/target model pair preserves output semantics and improves decode latency or throughput |
+| 2 | KV-cache compression | FP8 KV write/read boundary with explicit scale layout | lower cache bytes and higher admitted context or batch size without unacceptable quality or TPOT loss |
+| 3 | Complete sampling tail | fused penalties, top-k/top-p, renormalization, and deterministic RNG | seeded token parity or a declared statistical contract plus an order-reversed engine win |
+| 4 | KV-cache movement | block copy/gather/scatter/compact/remap for prefix reuse and preemption | fewer launches or less movement time in a real scheduler path |
+| 5 | Quantization plumbing | scale, pack/unpack, dequant/requant, and layout transitions around vendor GEMM | one named quantized model removes an HBM pass or temporary tensor |
+| 6 | MoE routing and movement | top-k routing, histogram/prefix sum, permutation, and inverse permutation | lower model-level MoE latency while grouped GEMM remains vendor-owned |
+| 7 | Minimal Rust decode proof | zero-copy Rust orchestration over vendor-produced tensors and Loom operators | one deterministic decode step uses borrowed memory and stream ownership without becoming an inference engine |
+
 ## K0: Backend Foundation
 
 Status: complete.
@@ -107,10 +141,26 @@ Status: in progress.
    complete, while the measured 0.5B end-to-end result remains at parity;
 3. dynamic INT8 output quantization when a named model path requires it;
 4. GELU/GELU-tanh and gated variants admitted by model coverage;
-5. vendor GEMM integration with bias, activation, and quantization epilogues.
+5. explicit handoff to engine-selected vendor GEMM, with Loom limited to
+   memory-bound bias, activation, and quantization boundaries around it.
 
 Exit: a fused activation+quantization path removes an HBM round trip and
 improves a real model workload. Standalone SiLU parity alone does not close it.
+
+## K2.5: Quantization Plumbing Around Vendor GEMM
+
+Status: planned.
+
+- per-token, per-channel, and per-block scale reduction for FP8 and INT8;
+- pack/unpack and layout conversion for engine-selected quantized kernels;
+- dequantize, requantize, scale conversion, and scale-layout transpose;
+- fuse adjacent activation, normalization, or cache movement only when it
+  removes a measured launch or HBM round trip;
+- keep matrix multiplication and its tuning entirely in the vendor backend.
+
+Exit: a named quantized model path passes bitwise or declared-tolerance gates,
+records the vendor GEMM unchanged on both sides, and improves an engine-level
+latency, memory, or temporary-allocation metric.
 
 ## K3: KV-Cache Update Family
 
@@ -120,11 +170,18 @@ Status: in progress.
   layouts, vLLM compiler fusion, H20 named baseline, and exact-token Qwen2.5
   engine gates complete; operator benefit is measurable, model-level benefit
   remains open;
-- append/copy with layout conversion;
-- FP8/INT8 quantize and dequantize;
-- gather/scatter for paged cache movement.
+- FP8 KV quantize-on-write and dequantize-on-read with an explicit per-head or
+  per-block scale contract is the next cache deliverable; INT8 follows only
+  when a named engine/model path requires it;
+- append/copy with layout conversion for engine-native paged caches;
+- block copy, swap, gather, scatter, compact, and remap for prefix caching,
+  preemptive scheduling, beam movement, and cache defragmentation;
+- expose no private cache ownership: engine allocations, page tables, streams,
+  and lifetime remain borrowed.
 
-Exit: fewer HBM passes and lower TPOT in a real engine.
+Exit: a real engine shows lower cache bytes and a larger admitted context or
+batch size for compression, or lower scheduler movement time for relocation,
+while preserving token/quality gates and reporting TPOT impact explicitly.
 
 ## K4: Decode Tail
 
@@ -143,13 +200,35 @@ Status: in progress.
   are complete; H20 evidence selects Loom only for at least 32 rows and a
   65,536+ vocabulary, while smaller shapes fall back because the
   one-block-per-row kernel is slower there;
-- fused logits bias, masking, bad-word suppression, and history penalties;
-- top-k/top-p filtering, renormalization, and deterministic RNG sampling;
-- top-k logprobs.
+- fused logits bias, temperature, masking, bad-word suppression, and sparse
+  repetition/presence/frequency penalties;
+- top-k/top-p filtering, renormalization, and deterministic counter-based RNG
+  sampling without a host round trip;
+- top-k logprobs without a full-vocabulary probability tensor.
 
 Exit: fewer launches and temporary tensors with identical token results. The
 selected-logprob exit gates are closed for pure greedy and engine-owned general
 sampling requests with `logprobs=0`; owning the selection kernels remains open.
+
+## K4.5: Speculative Decoding Support
+
+Status: next after K0.7.
+
+- construct batched draft-verification metadata and tree/branch masks consumed
+  by an engine-selected attention backend;
+- verify draft-token probabilities in bulk and implement deterministic
+  acceptance/rejection using an explicit RNG state contract;
+- compact accepted tokens, emit the bonus-token decision, and update
+  caller-owned sequence/KV metadata without host round trips;
+- add cache commit/rollback or slot-remap primitives only where the selected
+  engine exposes that boundary;
+- keep draft/target model GEMM and verification attention in vendor libraries.
+
+Exit: one named draft/target model pair reaches Loom from a real engine,
+preserves the engine's declared sampling distribution and seeded behavior,
+records path hits, and improves end-to-end decode latency or throughput in both
+provider orders. A standalone acceptance-kernel benchmark does not close this
+milestone.
 
 ## K5: MoE Routing And Movement
 
@@ -157,9 +236,13 @@ Status: planned.
 
 - top-k routing, renormalization, and expert mapping;
 - token histogram, prefix sum, permutation, and inverse permutation;
-- grouped-GEMM vendor dispatch and fused expert-output reduction.
+- caller-owned metadata and buffer handoff into the engine-selected grouped
+  GEMM, with no Loom matrix implementation;
+- weighted expert-output reduction and shared/routed output fusion when they
+  remove measured memory traffic.
 
 Exit: routing and movement reduce model-level MoE latency on a named engine.
+The vendor grouped GEMM is identical on both sides of the comparison.
 
 ## K6: Attention
 
@@ -205,6 +288,24 @@ Status: planned after reproducible single-GPU and multi-GPU engine baselines.
 
 Exit: end-to-end TP or EP goodput improves under an equivalent NCCL/transport
 baseline; local adapters do not count as distributed evidence.
+
+## K8: Engine-Neutral Rust Decode Proof
+
+Status: planned after one new post-K0.7 feature reaches an engine.
+
+- accept vendor- or engine-produced CUDA tensors through borrowed Rust device
+  memory and a non-owning stream;
+- chain a minimal decode slice such as cache update, logits processing,
+  sampling, and token output through the existing safe Loom APIs;
+- use a callback or external boundary for every GEMM and model-owned attention
+  operation;
+- allocate no private copy of framework tensors and own no scheduler, model
+  weights, tokenizer, or KV-cache lifetime.
+
+Exit: a reproducible Rust example performs one deterministic zero-copy decode
+step, matches a reference token and state update, survives external-stream and
+CUDA Graph gates where applicable, and demonstrates that Loom is engine-neutral
+without growing into an inference engine.
 
 The complete intended surface, including profile-gated layout primitives, is
 tracked in the [operator catalog](operator-catalog.md).
