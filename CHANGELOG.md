@@ -3,6 +3,23 @@
 Loom Kernels follows Semantic Versioning. The Rust crates use Cargo's SemVer
 spelling; Python source-adapter metadata uses the equivalent PEP 440 spelling.
 
+## Unreleased
+
+### Added
+
+- `loom-cuda-bridge`, a panic-contained checked C boundary that converts
+  framework-owned pointers, element counts, and CUDA streams into borrowed safe
+  Rust resources;
+- a first Add+RMSNorm PyTorch/vLLM vertical slice through that bridge, with
+  launch telemetry, external-stream, `torch.compile`, CUDA Graph, and invalid
+  buffer gates on NVIDIA H20.
+
+### Fixed
+
+- source-checkout library discovery now follows the packaged
+  `crates/loom-cuda-sys/cuda` layout after removal of the legacy root `cuda`
+  directory.
+
 ## 1.0.0-alpha.1 — 2026-07-22
 
 First public alpha of Loom Kernels as a Rust-first CUDA operator backend for

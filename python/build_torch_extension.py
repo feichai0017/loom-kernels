@@ -22,9 +22,14 @@ def main() -> None:
         raise FileNotFoundError(f"CUDA headers not found below {cuda_home}")
     build_root = repository / "build"
     native_library = build_root / "libloom_kernels_cuda.so"
+    rust_bridge = build_root / "libloom_cuda_bridge.so"
     if not native_library.is_file():
         raise FileNotFoundError(
             f"{native_library} is missing; run python/build_native.py first"
+        )
+    if not rust_bridge.is_file():
+        raise FileNotFoundError(
+            f"{rust_bridge} is missing; run python/build_native.py first"
         )
 
     extension_build = build_root / "torch_extension"
@@ -34,12 +39,14 @@ def main() -> None:
         sources=[str(repository / "python" / "csrc" / "torch_ops.cpp")],
         extra_include_paths=[
             str(cuda_sources / "include"),
+            str(repository / "crates" / "loom-cuda-bridge" / "include"),
             str(cuda_include),
         ],
         extra_cflags=["-O3", "-std=c++17"],
         extra_ldflags=[
             f"-L{build_root}",
             "-lloom_kernels_cuda",
+            "-lloom_cuda_bridge",
             "-Wl,-rpath,'$$ORIGIN'",
             "-Wl,-rpath,'$$ORIGIN/..'",
         ],

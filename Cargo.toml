@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/loom-cuda",
+    "crates/loom-cuda-bridge",
     "crates/loom-cuda-sys",
     "crates/loom-kernels",
 ]

@@ -506,6 +506,11 @@ def test_vllm_ir_dispatches_to_loom_provider():
     from vllm import ir
     from vllm.platforms import current_platform
 
+    from loom_kernels.torch_ops import (
+        add_rms_norm_rust_bridge_launch_count,
+        reset_add_rms_norm_rust_bridge_launch_count,
+    )
+
     register_vllm_ir()
     current_platform.import_ir_kernels()
     operation = ir.ops.fused_add_rms_norm
@@ -514,6 +519,7 @@ def test_vllm_ir_dispatches_to_loom_provider():
     weight = torch.ones(256, device="cuda", dtype=torch.bfloat16)
     expected_residual = (input_tensor.float() + residual.float()).to(torch.bfloat16)
 
+    reset_add_rms_norm_rust_bridge_launch_count()
     with operation.set_priority([DEFAULT_PROVIDER, "native"]):
         assert (
             operation.dispatch(input_tensor, residual, weight, 1.0e-5).provider
@@ -526,6 +532,7 @@ def test_vllm_ir_dispatches_to_loom_provider():
 
     assert output is input_tensor
     assert residual_output is residual
+    assert add_rms_norm_rust_bridge_launch_count() == 1
     torch.testing.assert_close(residual_output, expected_residual, rtol=0, atol=0)
 
 

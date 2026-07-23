@@ -32,9 +32,14 @@ Repository checkouts discover both libraries under `build/`. Packaged or
 externally managed deployments can set absolute paths explicitly:
 
 ```bash
-export LOOM_KERNELS_CUDA_LIBRARY=/path/to/libloom_cuda_kernels.so
-export LOOM_KERNELS_TORCH_LIBRARY=/path/to/loom_kernels_torch.so
+export LOOM_KERNELS_CUDA_LIBRARY=/path/to/libloom_kernels_cuda.so
+export LOOM_KERNELS_TORCH_LIBRARY=/path/to/libloom_kernels_torch.so
 ```
+
+`build_native.py` also builds `libloom_cuda_bridge.so`. Keep that library next
+to `libloom_kernels_torch.so` (or in its parent directory) so the dispatcher's
+relative runtime search path can load it. Add+RMSNorm uses this checked Rust
+path; the remaining operator families currently use the raw CUDA library.
 
 Automated binary wheels are not published yet.
 

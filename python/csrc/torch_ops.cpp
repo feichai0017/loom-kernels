@@ -1,4 +1,5 @@
 #include "loom_cuda.h"
+#include "loom_cuda_bridge.h"
 
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
@@ -84,28 +85,36 @@ void launch_add_rms_norm(at::Tensor input, at::Tensor residual,
   const auto stream = at::cuda::getCurrentCUDAStream(input.device().index());
   const auto rows = static_cast<uint32_t>(rows_i64);
   const auto hidden_size = static_cast<uint32_t>(hidden_size_i64);
+  const auto input_elements = static_cast<uint64_t>(input.numel());
+  const auto residual_elements = static_cast<uint64_t>(residual.numel());
+  const auto weight_elements = static_cast<uint64_t>(weight.numel());
   const auto epsilon_f32 = static_cast<float>(epsilon);
-  int status = LOOM_CUDA_UNSUPPORTED;
+  int status = LOOM_CUDA_BRIDGE_UNSUPPORTED;
   if (input.scalar_type() == at::kFloat) {
-    status = loom_cuda_add_rms_norm_f32(
-        input.data_ptr<float>(), residual.data_ptr<float>(),
-        weight.data_ptr<float>(), rows, hidden_size, epsilon_f32, stream.stream());
+    status = loom_cuda_bridge_add_rms_norm_f32(
+        input.data_ptr<float>(), input_elements, residual.data_ptr<float>(),
+        residual_elements, weight.data_ptr<float>(), weight_elements, rows,
+        hidden_size, epsilon_f32, stream.stream());
   } else if (input.scalar_type() == at::kHalf) {
-    status = loom_cuda_add_rms_norm_f16(
+    status = loom_cuda_bridge_add_rms_norm_f16(
         reinterpret_cast<uint16_t*>(input.data_ptr<at::Half>()),
+        input_elements,
         reinterpret_cast<uint16_t*>(residual.data_ptr<at::Half>()),
-        reinterpret_cast<const uint16_t*>(weight.data_ptr<at::Half>()), rows,
-        hidden_size, epsilon_f32, stream.stream());
+        residual_elements,
+        reinterpret_cast<const uint16_t*>(weight.data_ptr<at::Half>()),
+        weight_elements, rows, hidden_size, epsilon_f32, stream.stream());
   } else if (input.scalar_type() == at::kBFloat16) {
-    status = loom_cuda_add_rms_norm_bf16(
+    status = loom_cuda_bridge_add_rms_norm_bf16(
         reinterpret_cast<uint16_t*>(input.data_ptr<at::BFloat16>()),
+        input_elements,
         reinterpret_cast<uint16_t*>(residual.data_ptr<at::BFloat16>()),
-        reinterpret_cast<const uint16_t*>(weight.data_ptr<at::BFloat16>()), rows,
-        hidden_size, epsilon_f32, stream.stream());
+        residual_elements,
+        reinterpret_cast<const uint16_t*>(weight.data_ptr<at::BFloat16>()),
+        weight_elements, rows, hidden_size, epsilon_f32, stream.stream());
   }
-  TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
-              "Loom CUDA Add+RMSNorm launch failed: ",
-              loom_cuda_status_string(status), " (status ", status, ")");
+  TORCH_CHECK(status == LOOM_CUDA_BRIDGE_SUCCESS,
+              "Loom Rust Add+RMSNorm bridge failed: ",
+              loom_cuda_bridge_last_error_message(), " (status ", status, ")");
 }
 
 void add_rms_norm_mut(at::Tensor input, at::Tensor residual,
@@ -1078,6 +1087,18 @@ void reset_paged_decode_attention_launch_count() {
   paged_decode_attention_launches.store(0, std::memory_order_relaxed);
 }
 
+int64_t add_rms_norm_rust_bridge_launch_count() {
+  const auto count = loom_cuda_bridge_add_rms_norm_launch_count();
+  TORCH_CHECK(
+      count <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+      "Loom Rust Add+RMSNorm bridge launch count exceeds int64");
+  return static_cast<int64_t>(count);
+}
+
+void reset_add_rms_norm_rust_bridge_launch_count() {
+  loom_cuda_bridge_reset_add_rms_norm_launch_count();
+}
+
 }  // namespace
 
 TORCH_LIBRARY(loom_kernels, library) {
@@ -1087,6 +1108,10 @@ TORCH_LIBRARY(loom_kernels, library) {
   library.def(
       "add_rms_norm_mut_unchecked(Tensor(a!) input_tensor, Tensor(b!) "
       "residual, Tensor weight, float epsilon) -> ()");
+  library.def("add_rms_norm_rust_bridge_launch_count() -> int",
+              &add_rms_norm_rust_bridge_launch_count);
+  library.def("reset_add_rms_norm_rust_bridge_launch_count() -> ()",
+              &reset_add_rms_norm_rust_bridge_launch_count);
   library.def(
       "rms_norm_dynamic_fp8(Tensor input_tensor, Tensor weight, "
       "Tensor(a!) output, Tensor(b!) scales, float epsilon) -> ()");

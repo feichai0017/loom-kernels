@@ -1,0 +1,29 @@
+[package]
+name = "loom-cuda-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Checked C bridge into the safe Loom CUDA runtime"
+documentation = "https://docs.rs/loom-cuda-bridge"
+readme = "README.md"
+keywords = ["cuda", "ffi", "gpu", "inference", "rust"]
+categories = ["external-ffi-bindings", "hardware-support"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+cuda = [
+    "dep:half",
+    "dep:loom-cuda",
+    "dep:loom-kernels",
+    "loom-cuda/cuda",
+]
+
+[dependencies]
+half = { workspace = true, optional = true }
+loom-cuda = { version = "1.0.0-alpha.1", path = "../loom-cuda", optional = true }
+loom-kernels = { version = "1.0.0-alpha.1", path = "../loom-kernels", optional = true }

@@ -13,6 +13,7 @@ tokenization, KV lifetime, or request serving.
 | `loom-kernels` | dtype, shape/layout, aliasing, capability, and reference contracts |
 | `loom-cuda-sys` | stable C ABI, CUDA compilation, and packaged handwritten kernels |
 | `loom-cuda` | safe owned/borrowed CUDA resources, validation, dispatch, and benchmarks |
+| `loom-cuda-bridge` | panic-contained checked C entrypoints into borrowed Rust dispatch |
 | engine adapters | translate engine tensors/streams without owning engine policy |
 
 CPU references never call accelerator code. Backends report unsupported
@@ -41,10 +42,18 @@ boundary is crossed, ordinary callers cannot invent alternative trait
 implementations or pass read-only storage as a mutable output. Kernel launches
 remain asynchronous.
 
-The pure-Rust H20 smoke test exercises this zero-copy path. The current C++
-PyTorch dispatcher still calls the stable C ABI directly; routing a real engine
-adapter through this checked Rust boundary is a separate integration gate, not
-something inferred from the smoke test.
+The pure-Rust H20 smoke test exercises this zero-copy path. Add+RMSNorm also
+closes the first real framework gate: the C++ PyTorch dispatcher passes tensor
+pointers, actual element counts, and PyTorch's current stream through
+`loom-cuda-bridge`, which constructs borrowed Rust views and calls the same
+safe `CudaBackend` method. The bridge validates lengths, alignment, address
+overflow, and non-overlap, contains Rust panics behind a status ABI, and keeps a
+thread-local detailed error. It does not allocate, copy, synchronize, free, or
+destroy framework resources.
+
+This is deliberately an operator-by-operator migration. RMSNorm+FP8, activation,
+RoPE/KV, sampling, Min-P, and paged-decode framework paths still call the raw
+CUDA C ABI directly.
 
 ## Add+RMSNorm Contract
 

@@ -56,23 +56,26 @@ is never a performance claim.
 
 ```mermaid
 flowchart LR
-    A["Inference engine"] --> B["Native Rust adapter"]
+    A["Inference engine"] --> N["Native Rust adapter"]
     A --> P["PyTorch / vLLM adapter"]
-    B --> C["Safe Rust dispatch"]
-    C --> D["Raw C ABI"]
-    P --> D
-    D --> E["Handwritten CUDA"]
-    F["Rust contracts + CPU oracles"] -. validates .-> B
-    F -. gates .-> C
+    P -- "Add+RMSNorm" --> B["Checked Rust FFI bridge"]
+    P -- "Other admitted operators" --> C["Raw CUDA C ABI"]
+    N --> R["Safe Rust dispatch"]
+    B --> R
+    R --> C
+    C --> D["Handwritten CUDA"]
+    F["Rust contracts + CPU oracles"] -. validates .-> N
+    F -. gates .-> B
     F -. validates .-> P
 ```
 
 The backend either accepts the exact contract or declines it. Adapters do not
 silently copy, cast, reshape, or change sampling policy to force a Loom path.
-The current C++ PyTorch bridge calls the stable C ABI directly. The
-`v1.0.0-alpha.1` Rust runtime includes borrowed streams and tensor views so a
-native adapter can enter the same checked Rust dispatch without taking
-ownership or copying data.
+Add+RMSNorm is the first framework canary routed through
+`loom-cuda-bridge`: PyTorch passes its existing pointers, element counts, and
+current stream into checked Rust borrowed views before launch. Other operators
+still call the raw CUDA C ABI directly and will migrate only after their own
+correctness and engine gates close.
 
 ## Quick start
 
@@ -128,6 +131,9 @@ CUDA_HOME=/usr/local/cuda-13.1 \
   .venv-vllm/bin/python python/build_torch_extension.py
 ```
 
+The first build produces both the raw CUDA library and
+`libloom_cuda_bridge.so`; the second links the PyTorch dispatcher against both.
+
 See the [Python adapter README](python/README.md) for direct calls and the
 [vLLM integration guide](docs/guides/vllm-ir-provider.md) for every opt-in and
 fallback contract.
@@ -158,6 +164,7 @@ opens the raw JSON artifact used for the claim.
 | --- | --- |
 | `crates/loom-kernels` | Public Rust contracts, capabilities, and CPU references |
 | `crates/loom-cuda` | Safe CUDA backend and oracle-backed benchmarks |
+| `crates/loom-cuda-bridge` | Checked C boundary from framework-owned tensors into borrowed Rust dispatch |
 | `crates/loom-cuda-sys` | Raw CUDA ABI, build plumbing, and packaged handwritten kernels |
 | `python` | PyTorch dispatcher bridge and vLLM adapters |
 | `benchmarks` | Named framework and engine baselines |

@@ -19,7 +19,9 @@ _LIBRARY_PATH: Path | None = None
 
 def _repository_root() -> Path | None:
     for parent in Path(__file__).resolve().parents:
-        if (parent / "Cargo.toml").is_file() and (parent / "cuda").is_dir():
+        if (parent / "Cargo.toml").is_file() and (
+            parent / "crates" / "loom-cuda-sys" / "cuda"
+        ).is_dir():
             return parent
     return None
 

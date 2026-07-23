@@ -7,8 +7,10 @@ torch = pytest.importorskip("torch")
 from loom_kernels.torch_ops import (
     adapter_backend,
     add_rms_norm_,
+    add_rms_norm_rust_bridge_launch_count,
     dynamic_fp8_unchecked_custom_op,
     mutable_custom_op,
+    reset_add_rms_norm_rust_bridge_launch_count,
     rms_norm_dynamic_fp8,
     rms_norm_dynamic_fp8_out,
 )
@@ -56,6 +58,7 @@ def test_add_rms_norm_matches_vllm_semantics_on_external_stream(dtype, shape):
     input_pointer = input_tensor.data_ptr()
     residual_pointer = residual.data_ptr()
 
+    reset_add_rms_norm_rust_bridge_launch_count()
     stream = torch.cuda.Stream()
     with torch.cuda.stream(stream):
         output, residual_output = add_rms_norm_(
@@ -63,6 +66,7 @@ def test_add_rms_norm_matches_vllm_semantics_on_external_stream(dtype, shape):
         )
     stream.synchronize()
 
+    assert add_rms_norm_rust_bridge_launch_count() == 1
     assert output is input_tensor
     assert residual_output is residual
     assert output.data_ptr() == input_pointer
@@ -88,6 +92,33 @@ def test_mutation_schema_passes_torch_opcheck():
         (input_tensor, residual, weight, 1.0e-5),
         test_utils=("test_schema", "test_faketensor"),
     )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_unchecked_add_rms_norm_rejects_short_weight_in_rust_bridge():
+    input_tensor = torch.randn(2, 128, device="cuda", dtype=torch.float16)
+    residual = torch.randn_like(input_tensor)
+    weight = torch.ones(127, device="cuda", dtype=torch.float16)
+
+    reset_add_rms_norm_rust_bridge_launch_count()
+    with pytest.raises(RuntimeError, match=r"weight has 127 elements, expected 128"):
+        torch.ops.loom_kernels.add_rms_norm_mut_unchecked(
+            input_tensor, residual, weight, 1.0e-5
+        )
+    assert add_rms_norm_rust_bridge_launch_count() == 0
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
+def test_unchecked_add_rms_norm_rejects_aliasing_in_rust_bridge():
+    input_tensor = torch.randn(2, 128, device="cuda", dtype=torch.float16)
+    weight = torch.ones(128, device="cuda", dtype=torch.float16)
+
+    reset_add_rms_norm_rust_bridge_launch_count()
+    with pytest.raises(RuntimeError, match=r"regions must not overlap"):
+        torch.ops.loom_kernels.add_rms_norm_mut_unchecked(
+            input_tensor, input_tensor, weight, 1.0e-5
+        )
+    assert add_rms_norm_rust_bridge_launch_count() == 0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")

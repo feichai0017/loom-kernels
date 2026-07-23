@@ -2,7 +2,8 @@
 
 ## Implemented
 
-- Rust workspace split into public contracts, safe CUDA backend, and raw FFI;
+- Rust workspace split into public contracts, safe CUDA backend, a checked
+  framework bridge, and raw FFI;
 - `DType`, contiguous `TensorSpec`, normalization operator specs,
   `OperatorSpec`, and backend capability query;
 - F64-accumulation F32/FP16/BF16 RMSNorm and fused Add+RMSNorm CPU oracles;
@@ -50,7 +51,9 @@
   Rust sizing/execution APIs, two/four-head GQA packing, and CUDA Graph-safe
   PyTorch temporary ownership while preserving the original allocation-free
   C ABI;
-- a C++ PyTorch dispatcher bridge using the current CUDA stream;
+- a C++ PyTorch dispatcher using the current CUDA stream, with Add+RMSNorm
+  routed through `loom-cuda-bridge` into borrowed safe Rust dispatch while
+  other operators retain the direct raw-CUDA path;
 - a source-adapter Python wheel with explicit framework extras, project
   metadata, license/readme payloads, and a CI install/entry-point smoke gate;
 - a `loom_cuda` vLLM IR provider with native fallback and an opt-in vLLM
@@ -86,6 +89,10 @@
   large-shape execution passed at `16x8192`.
 - PyTorch external-stream, mutation-schema/FakeTensor, `torch.compile`, and
   CUDA Graph tests passed with the C++ dispatcher bridge;
+- the checked Add+RMSNorm Rust bridge built and linked on H20, passed
+  CUDA-feature Clippy and its address-range unit test, rejected short and
+  overlapping buffers before launch, and recorded path hits from both direct
+  PyTorch and vLLM IR execution;
 - Loom and vLLM's CUDA provider were bitwise identical for BF16 at `1x4096`,
   `8x4096`, `128x4096`, and `8x8192`;
 - through the same vLLM IR dispatch, order-reversed H20 runs measured Loom
@@ -174,7 +181,7 @@
 - selected-token PyTorch tests cover arbitrary IDs/ranks, F32/FP16/BF16,
   Qwen's 151,936-token vocabulary, ties, padded rows, external streams,
   FakeTensor/schema validation, `torch.compile`, and CUDA Graph replay;
-- the current complete H20 Python suite passes 177 tests; the Rust core passes
+- the current complete H20 Python suite passes 179 tests; the Rust core passes
   30 contract/oracle tests, and the CUDA-feature workspace passes formatting,
   Clippy, release build, plus six safe-wrapper CPU-oracle tests;
 - against vLLM's exact `compute_logprobs + gather_logprobs(0)` path for the

@@ -53,9 +53,11 @@ from .ops.activation import (
 )
 from .ops.norm import (
     add_rms_norm_,
+    add_rms_norm_rust_bridge_launch_count,
     dynamic_fp8_custom_op,
     dynamic_fp8_unchecked_custom_op,
     mutable_custom_op,
+    reset_add_rms_norm_rust_bridge_launch_count,
     rms_norm_dynamic_fp8,
     rms_norm_dynamic_fp8_out,
     supports_add_rms_norm,
@@ -100,6 +102,7 @@ def adapter_backend() -> str:
 __all__ = [
     "adapter_backend",
     "add_rms_norm_",
+    "add_rms_norm_rust_bridge_launch_count",
     "dynamic_fp8_custom_op",
     "dynamic_fp8_unchecked_custom_op",
     "greedy_sample_logprobs",
@@ -123,6 +126,7 @@ __all__ = [
     "rope_paged_kv_write_launch_count",
     "rope_paged_kv_write_unchecked_custom_op",
     "reset_rope_paged_kv_write_launch_count",
+    "reset_add_rms_norm_rust_bridge_launch_count",
     "reset_greedy_sample_logprobs_launch_count",
     "reset_min_p_filter_launch_count",
     "reset_paged_decode_attention_launch_count",

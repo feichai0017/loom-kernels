@@ -176,6 +176,24 @@ def add_rms_norm_(
     return input_tensor, residual
 
 
+def add_rms_norm_rust_bridge_launch_count() -> int:
+    """Return successful Add+RMSNorm submissions through the Rust bridge."""
+    if _dispatch()._EXTENSION_PATH is None:
+        raise RuntimeError(
+            "Rust bridge telemetry requires the prebuilt PyTorch extension"
+        )
+    return int(torch.ops.loom_kernels.add_rms_norm_rust_bridge_launch_count())
+
+
+def reset_add_rms_norm_rust_bridge_launch_count() -> None:
+    """Reset Add+RMSNorm Rust bridge launch telemetry."""
+    if _dispatch()._EXTENSION_PATH is None:
+        raise RuntimeError(
+            "Rust bridge telemetry requires the prebuilt PyTorch extension"
+        )
+    torch.ops.loom_kernels.reset_add_rms_norm_rust_bridge_launch_count()
+
+
 def rms_norm_dynamic_fp8_out(
     input_tensor: torch.Tensor,
     weight: torch.Tensor,

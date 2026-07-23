@@ -39,8 +39,11 @@ jobs:
           cargo package -p loom-kernels
           cargo package -p loom-cuda-sys
           cargo package -p loom-cuda --list > /tmp/loom-cuda-package-files
+          cargo package -p loom-cuda-bridge --list > /tmp/loom-cuda-bridge-package-files
           grep -Fx 'README.md' /tmp/loom-cuda-package-files
           grep -Fx 'examples/rust_cuda_smoke.rs' /tmp/loom-cuda-package-files
+          grep -Fx 'README.md' /tmp/loom-cuda-bridge-package-files
+          grep -Fx 'include/loom_cuda_bridge.h' /tmp/loom-cuda-bridge-package-files
           tar -tf target/package/loom-cuda-sys-*.crate > /tmp/loom-cuda-sys-package-files
           grep -Eq '/cuda/src/paged_decode_attention\.cu$' \
             /tmp/loom-cuda-sys-package-files

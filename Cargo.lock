@@ -169,6 +169,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom-cuda-bridge"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "half",
+ "loom-cuda",
+ "loom-kernels",
+]
+
+[[package]]
 name = "loom-cuda-sys"
 version = "1.0.0-alpha.1"
 dependencies = [

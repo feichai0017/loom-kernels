@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the dependency-light Loom CUDA shared library for Python adapters."""
+"""Build the CUDA library and checked Rust bridge for Python adapters."""
 
 from __future__ import annotations
 
@@ -79,7 +79,45 @@ def main() -> None:
         ]
     )
     subprocess.run(command, check=True)
+
+    cargo = shutil.which("cargo")
+    if cargo is None:
+        cargo_candidate = Path.home() / ".cargo" / "bin" / "cargo"
+        if cargo_candidate.is_file():
+            cargo = str(cargo_candidate)
+        else:
+            raise FileNotFoundError(
+                "cargo was not found; install Rust before building the checked bridge"
+            )
+
+    rust_environment = os.environ.copy()
+    rust_environment["CUDA_HOME"] = str(args.cuda_home.resolve())
+    rust_environment["LOOM_CUDA_ARCHS"] = ",".join(archs)
+    subprocess.run(
+        [
+            cargo,
+            "build",
+            "--release",
+            "--locked",
+            "-p",
+            "loom-cuda-bridge",
+            "--features",
+            "cuda",
+        ],
+        cwd=repository,
+        env=rust_environment,
+        check=True,
+    )
+    rust_bridge_source = repository / "target" / "release" / "libloom_cuda_bridge.so"
+    if not rust_bridge_source.is_file():
+        raise FileNotFoundError(
+            f"Rust bridge build completed without producing {rust_bridge_source}"
+        )
+    rust_bridge_output = output.parent / rust_bridge_source.name
+    shutil.copy2(rust_bridge_source, rust_bridge_output)
+
     print(output)
+    print(rust_bridge_output)
 
 
 if __name__ == "__main__":
