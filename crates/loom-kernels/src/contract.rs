@@ -126,6 +126,10 @@ pub enum ContractError {
         length: i64,
         capacity: usize,
     },
+    MaxSequenceLengthOutOfBounds {
+        length: usize,
+        capacity: usize,
+    },
     BlockIdOutOfBounds {
         sequence: usize,
         logical_block: usize,
@@ -223,6 +227,10 @@ impl fmt::Display for ContractError {
             } => write!(
                 formatter,
                 "sequence length {length} for sequence {sequence} is outside [1, {capacity}]"
+            ),
+            Self::MaxSequenceLengthOutOfBounds { length, capacity } => write!(
+                formatter,
+                "maximum sequence length {length} exceeds block-table capacity {capacity}"
             ),
             Self::BlockIdOutOfBounds {
                 sequence,

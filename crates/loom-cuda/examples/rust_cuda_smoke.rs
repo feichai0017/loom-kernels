@@ -1,6 +1,6 @@
 use loom_cuda::{
     runtime::{CudaStreamRef, DeviceBuffer, DeviceSlice, DeviceSliceMut},
-    CudaBackend,
+    CudaBackend, RowStridedLayout,
 };
 use loom_kernels::{
     add_rms_norm_f32_reference, greedy_sample_logprobs_f32_reference, AddRmsNormSpec, DType,
@@ -128,6 +128,7 @@ fn validate_greedy_sample_logprobs(backend: &CudaBackend) -> Result<(), Box<dyn 
         &mut device_logprobs,
         &mut device_ranks,
         spec,
+        RowStridedLayout::contiguous(spec.vocab_size()),
     )?;
     backend.stream().synchronize()?;
 

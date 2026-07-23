@@ -1,8 +1,25 @@
 use crate::rms_norm::CudaBackend;
-use crate::runtime::{loom_status_result, CudaDeviceRead, CudaDeviceWrite, CudaStreamHandle};
+use crate::runtime::{
+    loom_status_result, CudaDeviceRead, CudaDeviceWrite, CudaStreamHandle, DeviceSlice,
+};
 use crate::CudaExecutorError;
 use half::{bf16, f16};
 use loom_kernels::{DType, SiluAndMulDynamicFp8Spec, SiluAndMulSpec};
+
+/// Physical ordering of per-block FP8 scales.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Fp8ScaleLayout {
+    #[default]
+    RowMajor,
+    GroupMajor,
+}
+
+/// Execution options for fused SiLU-and-Mul plus dynamic FP8.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SiluAndMulDynamicFp8Options<'a> {
+    pub scale_upper_bound: Option<DeviceSlice<'a, f32>>,
+    pub scale_layout: Fp8ScaleLayout,
+}
 
 impl<S: CudaStreamHandle> CudaBackend<S> {
     /// Launches vectorized F32 SiLU-and-Mul asynchronously on this stream.
@@ -72,9 +89,11 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         output: &mut impl CudaDeviceWrite<u8>,
         scales: &mut impl CudaDeviceWrite<f32>,
         spec: SiluAndMulDynamicFp8Spec,
+        options: SiluAndMulDynamicFp8Options<'_>,
     ) -> Result<(), CudaExecutorError> {
         require_quant_dtype(spec, DType::F16)?;
         let (rows, width, group_size) = validate_quant_buffers(input, output, scales, spec)?;
+        let scale_upper_bound = validate_options(options)?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_silu_and_mul_dynamic_fp8_f16(
                 input.as_ptr().cast::<u16>(),
@@ -83,8 +102,8 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
                 rows,
                 width,
                 group_size,
-                std::ptr::null(),
-                0,
+                scale_upper_bound,
+                u32::from(options.scale_layout == Fp8ScaleLayout::GroupMajor),
                 self.raw_stream(),
             )
         })
@@ -97,9 +116,11 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         output: &mut impl CudaDeviceWrite<u8>,
         scales: &mut impl CudaDeviceWrite<f32>,
         spec: SiluAndMulDynamicFp8Spec,
+        options: SiluAndMulDynamicFp8Options<'_>,
     ) -> Result<(), CudaExecutorError> {
         require_quant_dtype(spec, DType::Bf16)?;
         let (rows, width, group_size) = validate_quant_buffers(input, output, scales, spec)?;
+        let scale_upper_bound = validate_options(options)?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_silu_and_mul_dynamic_fp8_bf16(
                 input.as_ptr().cast::<u16>(),
@@ -108,11 +129,23 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
                 rows,
                 width,
                 group_size,
-                std::ptr::null(),
-                0,
+                scale_upper_bound,
+                u32::from(options.scale_layout == Fp8ScaleLayout::GroupMajor),
                 self.raw_stream(),
             )
         })
+    }
+}
+
+fn validate_options(
+    options: SiluAndMulDynamicFp8Options<'_>,
+) -> Result<*const f32, CudaExecutorError> {
+    match options.scale_upper_bound {
+        Some(scale_upper_bound) => {
+            scale_upper_bound.require_len(1, "SiLU-and-Mul+FP8 scale upper bound")?;
+            Ok(scale_upper_bound.as_ptr())
+        }
+        None => Ok(std::ptr::null()),
     }
 }
 

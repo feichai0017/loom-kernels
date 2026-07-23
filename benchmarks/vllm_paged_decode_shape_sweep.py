@@ -11,7 +11,10 @@ from pathlib import Path
 
 import torch
 
-from loom_kernels.torch_ops import PAGED_DECODE_MAX_CONTEXT, adapter_backend
+from loom_kernels.torch_ops import (
+    PAGED_DECODE_MAX_CONTEXT,
+    bridge_abi_version,
+)
 from vllm_paged_decode_attention import DTYPES, benchmark_case
 
 
@@ -114,8 +117,6 @@ def main() -> None:
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
-    if adapter_backend() != "cpp-dispatch":
-        raise RuntimeError("benchmark requires the Loom C++ dispatcher bridge")
     if min(args.warmup, args.iterations, args.samples) <= 0:
         raise ValueError("warmup, iterations, and samples must be positive")
 
@@ -162,7 +163,7 @@ def main() -> None:
         "schema_version": 1,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "operator": "single-token paged MQA/GQA decode attention shape sweep",
-        "candidate": "Loom paged_decode_attention_unchecked",
+        "candidate": "Loom paged_decode_attention",
         "baseline": (
             f"vLLM {vllm.__version__} FlashAttention varlen FA{fa_version}"
         ),
@@ -191,7 +192,7 @@ def main() -> None:
             "torch_cuda": torch.version.cuda,
             "vllm": vllm.__version__,
             "flash_attention_version": fa_version,
-            "adapter_backend": adapter_backend(),
+            "bridge_abi_version": bridge_abi_version(),
         },
         "acceptance": {
             "passed": True,

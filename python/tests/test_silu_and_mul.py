@@ -5,9 +5,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from loom_kernels.torch_ops import (
-    adapter_backend,
     silu_and_mul,
-    silu_and_mul_custom_op,
     silu_and_mul_out,
 )
 
@@ -60,20 +58,16 @@ def test_silu_and_mul_schema_passes_torch_opcheck():
     input_tensor = torch.randn(2, 256, device="cuda", dtype=torch.float16)
     output = torch.empty(2, 128, device="cuda", dtype=torch.float16)
     torch.library.opcheck(
-        silu_and_mul_custom_op(),
+        torch.ops.loom_kernels.silu_and_mul.default,
         (input_tensor, output),
         test_utils=("test_schema", "test_faketensor"),
     )
 
 
-def test_silu_and_mul_uses_cpp_dispatch_when_extension_is_available():
-    assert adapter_backend() == "cpp-dispatch"
-
-
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
-def test_silu_and_mul_unchecked_op_survives_torch_compile():
+def test_silu_and_mul_op_survives_torch_compile():
     def compiled_target(input_tensor, output):
-        torch.ops.loom_kernels.silu_and_mul_unchecked(input_tensor, output)
+        torch.ops.loom_kernels.silu_and_mul(input_tensor, output)
         return output
 
     compiled = torch.compile(compiled_target, fullgraph=True)

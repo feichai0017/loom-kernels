@@ -5,9 +5,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from loom_kernels.torch_ops import (
-    adapter_backend,
     selected_token_logprobs,
-    selected_token_logprobs_custom_op,
 )
 
 
@@ -36,7 +34,6 @@ def test_selected_token_logprobs_matches_pytorch(dtype, shape):
     actual = selected_token_logprobs(logits, token_ids)
     torch.cuda.synchronize()
 
-    assert adapter_backend() == "cpp-dispatch"
     torch.testing.assert_close(actual[0], expected[0], rtol=2.0e-5, atol=2.0e-5)
     assert torch.equal(actual[1], expected[1])
 
@@ -96,7 +93,7 @@ def test_selected_token_logprobs_dispatcher_contract_and_fake_tensor():
     logits = torch.randn((3, 257), device="cuda", dtype=torch.bfloat16)
     token_ids = torch.tensor([0, 128, 256], device="cuda", dtype=torch.int64)
     torch.library.opcheck(
-        selected_token_logprobs_custom_op(),
+        torch.ops.loom_kernels.selected_token_logprobs.default,
         (logits, token_ids),
         test_utils=("test_schema", "test_faketensor", "test_autograd_registration"),
     )

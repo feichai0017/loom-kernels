@@ -371,7 +371,7 @@ fn rotary_embedding_reference<T: RotaryElement>(
     expected_dtype: DType,
 ) -> Result<(), ContractError> {
     validate_rotary_buffers(query, key, positions, cos_sin_cache, spec, expected_dtype)?;
-    apply_rotary_embedding_unchecked(query, key, positions, cos_sin_cache, spec);
+    apply_validated_rotary_embedding(query, key, positions, cos_sin_cache, spec);
     Ok(())
 }
 
@@ -396,7 +396,7 @@ fn rope_paged_kv_write_reference<T: RotaryElement>(
     require_len("slot_mapping", slot_mapping.len(), rotary.tokens())?;
     validate_slot_mapping(slot_mapping, spec.slot_capacity())?;
 
-    apply_rotary_embedding_unchecked(query, key, positions, cos_sin_cache, rotary);
+    apply_validated_rotary_embedding(query, key, positions, cos_sin_cache, rotary);
 
     for (token, &slot) in slot_mapping.iter().enumerate() {
         if slot < 0 {
@@ -475,7 +475,7 @@ fn validate_slot_mapping(slot_mapping: &[i64], slot_capacity: usize) -> Result<(
     Ok(())
 }
 
-fn apply_rotary_embedding_unchecked<T: RotaryElement>(
+fn apply_validated_rotary_embedding<T: RotaryElement>(
     query: &mut [T],
     key: &mut [T],
     positions: &[i64],

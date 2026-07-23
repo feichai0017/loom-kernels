@@ -22,6 +22,7 @@ pub struct PagedDecodeAttentionSpec {
     num_blocks: usize,
     block_size: usize,
     max_blocks_per_sequence: usize,
+    max_sequence_length: usize,
     scale: f32,
     dtype: DType,
 }
@@ -39,6 +40,7 @@ impl PagedDecodeAttentionSpec {
         num_blocks: usize,
         block_size: usize,
         max_blocks_per_sequence: usize,
+        max_sequence_length: usize,
         scale: f32,
         dtype: DType,
     ) -> Result<Self, ContractError> {
@@ -50,6 +52,7 @@ impl PagedDecodeAttentionSpec {
             || num_blocks == 0
             || block_size == 0
             || max_blocks_per_sequence == 0
+            || max_sequence_length == 0
         {
             return Err(ContractError::ZeroDimension);
         }
@@ -68,7 +71,15 @@ impl PagedDecodeAttentionSpec {
         checked_product(&[num_blocks, block_size, kv_heads, head_size])?;
         checked_product(&[num_blocks, block_size, kv_heads, value_head_size])?;
         checked_product(&[sequences, max_blocks_per_sequence])?;
-        checked_product(&[max_blocks_per_sequence, block_size])?;
+        let table_capacity = max_blocks_per_sequence
+            .checked_mul(block_size)
+            .ok_or(ContractError::ElementCountOverflow)?;
+        if max_sequence_length > table_capacity {
+            return Err(ContractError::MaxSequenceLengthOutOfBounds {
+                length: max_sequence_length,
+                capacity: table_capacity,
+            });
+        }
 
         Ok(Self {
             sequences,
@@ -79,6 +90,7 @@ impl PagedDecodeAttentionSpec {
             num_blocks,
             block_size,
             max_blocks_per_sequence,
+            max_sequence_length,
             scale,
             dtype,
         })
@@ -121,7 +133,7 @@ impl PagedDecodeAttentionSpec {
     }
 
     pub const fn max_sequence_length(self) -> usize {
-        self.max_blocks_per_sequence * self.block_size
+        self.max_sequence_length
     }
 
     pub const fn scale(self) -> f32 {

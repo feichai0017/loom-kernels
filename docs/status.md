@@ -2,8 +2,8 @@
 
 ## Implemented
 
-- Rust workspace split into public contracts, safe CUDA backend, a checked
-  framework bridge, and raw FFI;
+- Rust workspace split into public contracts, safe CUDA backend, one checked
+  framework bridge, and an internal kernel-launch FFI;
 - `DType`, contiguous `TensorSpec`, normalization operator specs,
   `OperatorSpec`, and backend capability query;
 - F64-accumulation F32/FP16/BF16 RMSNorm and fused Add+RMSNorm CPU oracles;
@@ -15,8 +15,8 @@
 - aligned 128-bit pack8 Add+RMSNorm with pair and scalar fallbacks;
 - three-pass RMSNorm plus dynamic per-token FP8 E4M3FN quantization, with
   pack4 output conversion and scalar fallback;
-- checked safe-Rust, raw C ABI, caller-allocated PyTorch out, and convenience
-  allocating entrypoints for RMSNorm+FP8;
+- checked safe-Rust, caller-allocated PyTorch out, and convenience allocating
+  entrypoints for RMSNorm+FP8;
 - split-half SiLU-and-Mul contracts and CPU oracles for F32/FP16/BF16;
 - handwritten SiLU-and-Mul with aligned 16-byte packs and scalar fallback;
 - FP16/BF16 SiLU-and-Mul fused directly into dynamic per-block FP8 E4M3FN,
@@ -51,13 +51,12 @@
   Rust sizing/execution APIs, two/four-head GQA packing, and CUDA Graph-safe
   PyTorch temporary ownership while preserving the original allocation-free
   C ABI;
-- a C++ PyTorch dispatcher using the current CUDA stream, with Add+RMSNorm and
-  RMSNorm+dynamic-FP8 plus contiguous greedy+sampled-logprob routed through
-  `loom-cuda-bridge` into borrowed safe Rust dispatch; padded greedy rows and
-  other operators retain the direct raw-CUDA path;
+- a single C++ PyTorch dispatcher path using the current CUDA stream; all ten
+  semantic operators route through `loom-cuda-bridge` into borrowed safe Rust
+  dispatch with explicit storage spans and layouts;
 - a source-adapter Python wheel with explicit framework extras, project
   metadata, license/readme payloads, and a CI install/entry-point smoke gate;
-- a `loom_cuda` vLLM IR provider with native fallback and an opt-in vLLM
+- a `loom_cuda` vLLM IR provider with exact-contract admission and an opt-in vLLM
   `SiluAndMul` out-of-tree layer replacement, plus an opt-in activation-quant
   fusion-table replacement, RoPE+KV compiler-pass adapter, and pure-greedy
   general selected-token sampled-logprob fast paths, and a measured-shape
@@ -94,11 +93,10 @@
   CUDA-feature Clippy and its address-range unit test, rejected short and
   overlapping buffers before launch, and recorded Add+RMSNorm path hits from
   direct PyTorch and vLLM IR plus RMSNorm+FP8 path hits from direct PyTorch;
-- the contiguous greedy+sampled-logprob path now builds and links through the
-  checked Rust bridge on H20, records one Rust path hit for admitted contiguous
-  logits, preserves the padded-row raw-ABI fallback with zero Rust path hits,
-  rejects short/overlapping regions before submission, and passes
-  external-stream, compile, graph, and vLLM adapter tests;
+- greedy+sampled-logprob now builds and links through the checked Rust bridge
+  for both contiguous and padded row-strided logits, rejects short/overlapping
+  regions before submission, and passes external-stream, compile, graph, and
+  vLLM adapter tests;
 - official vLLM 0.24.0 and 0.25.1 packages each passed the complete 183-test
   H20 Python GPU suite on Torch 2.11.0+cu130; the 0.25.1 process loaded its own
   `vllm/_C_stable_libtorch.abi3.so`, and the focused greedy/vLLM gate passed

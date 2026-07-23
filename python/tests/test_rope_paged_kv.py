@@ -4,7 +4,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from loom_kernels.torch_ops import adapter_backend, rope_paged_kv_write_
+from loom_kernels.torch_ops import rope_paged_kv_write_
 
 
 def make_cos_sin_cache(
@@ -129,7 +129,6 @@ def test_rope_paged_kv_matches_vllm(dtype, is_neox, layout):
     )
     torch.cuda.synchronize()
 
-    assert adapter_backend() == "cpp-dispatch"
     assert all(
         actual is expected
         for actual, expected in zip(

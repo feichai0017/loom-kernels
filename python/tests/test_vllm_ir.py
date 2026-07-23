@@ -59,8 +59,9 @@ def test_vllm_greedy_sample_logprobs_fast_path_matches_sampler_semantics():
     from vllm.v1.sample.sampler import Sampler
 
     from loom_kernels.torch_ops import (
-        greedy_sample_logprobs_rust_bridge_launch_count,
-        reset_greedy_sample_logprobs_rust_bridge_launch_count,
+        Operator,
+        launch_count,
+        reset_launch_count,
     )
 
     assert (
@@ -78,7 +79,7 @@ def test_vllm_greedy_sample_logprobs_fast_path_matches_sampler_semantics():
         logitsprocs=SimpleNamespace(non_argmax_invariant=[]),
         thinking_budget_state_holder=None,
     )
-    reset_greedy_sample_logprobs_rust_bridge_launch_count()
+    reset_launch_count(Operator.GREEDY_SAMPLE_LOGPROBS)
     output = Sampler().forward(logits, metadata)
     expected_ids = logits.argmax(-1).to(torch.int32)
     expected_logprobs = logits.log_softmax(-1).gather(
@@ -102,7 +103,7 @@ def test_vllm_greedy_sample_logprobs_fast_path_matches_sampler_semantics():
         output.logprobs_tensors.selected_token_ranks,
         expected_ranks,
     )
-    assert greedy_sample_logprobs_rust_bridge_launch_count() == 1
+    assert launch_count(Operator.GREEDY_SAMPLE_LOGPROBS) == 1
     assert provider_metadata()["greedy_sample_logprobs_override"] is True
 
 
@@ -176,15 +177,14 @@ def test_vllm_selected_token_path_handles_processed_greedy_batches(monkeypatch):
     from vllm.v1.sample.sampler import Sampler
 
     from loom_kernels.torch_ops import (
-        greedy_sample_logprobs_launch_count,
-        reset_greedy_sample_logprobs_launch_count,
-        reset_selected_token_logprobs_launch_count,
-        selected_token_logprobs_launch_count,
+        Operator,
+        launch_count,
+        reset_launch_count,
     )
 
     register_vllm_selected_token_logprobs()
-    reset_greedy_sample_logprobs_launch_count()
-    reset_selected_token_logprobs_launch_count()
+    reset_launch_count(Operator.GREEDY_SAMPLE_LOGPROBS)
+    reset_launch_count(Operator.SELECTED_TOKEN_LOGPROBS)
     logits = torch.randn((3, 1024), device="cuda", dtype=torch.float16)
     sampled = torch.tensor([7, 511, 1023], device="cuda")
     metadata = SimpleNamespace(
@@ -216,8 +216,8 @@ def test_vllm_selected_token_path_handles_processed_greedy_batches(monkeypatch):
     torch.cuda.synchronize()
 
     assert torch.equal(output.sampled_token_ids[:, 0], sampled.to(torch.int32))
-    assert greedy_sample_logprobs_launch_count() == 0
-    assert selected_token_logprobs_launch_count() == 1
+    assert launch_count(Operator.GREEDY_SAMPLE_LOGPROBS) == 0
+    assert launch_count(Operator.SELECTED_TOKEN_LOGPROBS) == 1
 
 
 def test_configures_vllm_rope_paged_kv_fusion():
@@ -274,8 +274,9 @@ def test_vllm_paged_decode_fast_path_matches_flash_attention():
     )
 
     from loom_kernels.torch_ops import (
-        paged_decode_attention_launch_count,
-        reset_paged_decode_attention_launch_count,
+        Operator,
+        launch_count,
+        reset_launch_count,
     )
 
     batch = 8
@@ -335,7 +336,7 @@ def test_vllm_paged_decode_fast_path_matches_flash_attention():
         register_vllm_paged_decode_attention()
         == PAGED_DECODE_OVERRIDE_KEY
     )
-    reset_paged_decode_attention_launch_count()
+    reset_launch_count(Operator.PAGED_DECODE_ATTENTION)
     actual = torch.empty_like(expected)
     returned = attention.forward(
         layer, query, key, value, kv_cache, metadata, actual
@@ -343,7 +344,7 @@ def test_vllm_paged_decode_fast_path_matches_flash_attention():
     torch.cuda.synchronize()
 
     assert returned is actual
-    assert paged_decode_attention_launch_count() == 1
+    assert launch_count(Operator.PAGED_DECODE_ATTENTION) == 1
     torch.testing.assert_close(actual, expected, rtol=2.0e-2, atol=2.0e-2)
     assert provider_metadata()["paged_decode_override"] is True
 
@@ -369,12 +370,13 @@ def test_vllm_min_p_processor_uses_loom_without_probability_tensor():
     from vllm.v1.sample.logits_processor.builtin import MinPLogitsProcessor
 
     from loom_kernels.torch_ops import (
-        min_p_filter_launch_count,
-        reset_min_p_filter_launch_count,
+        Operator,
+        launch_count,
+        reset_launch_count,
     )
 
     assert register_vllm_min_p() == MIN_P_OVERRIDE_KEY
-    reset_min_p_filter_launch_count()
+    reset_launch_count(Operator.MIN_P_FILTER)
     processor = object.__new__(MinPLogitsProcessor)
     processor.min_p_count = 31
     processor.min_p = torch.linspace(0.0, 0.8, 32, device="cuda").unsqueeze(1)
@@ -391,7 +393,7 @@ def test_vllm_min_p_processor_uses_loom_without_probability_tensor():
 
     assert returned is logits
     assert torch.equal(torch.isneginf(logits), torch.isneginf(expected))
-    assert min_p_filter_launch_count() == 1
+    assert launch_count(Operator.MIN_P_FILTER) == 1
     assert provider_metadata()["min_p_override"] is True
 
 
@@ -400,12 +402,13 @@ def test_vllm_min_p_processor_falls_back_below_measured_fast_path():
     from vllm.v1.sample.logits_processor.builtin import MinPLogitsProcessor
 
     from loom_kernels.torch_ops import (
-        min_p_filter_launch_count,
-        reset_min_p_filter_launch_count,
+        Operator,
+        launch_count,
+        reset_launch_count,
     )
 
     assert register_vllm_min_p() == MIN_P_OVERRIDE_KEY
-    reset_min_p_filter_launch_count()
+    reset_launch_count(Operator.MIN_P_FILTER)
     processor = object.__new__(MinPLogitsProcessor)
     processor.min_p_count = 2
     processor.min_p = torch.tensor([[0.0], [0.2], [0.8]], device="cuda")
@@ -422,7 +425,7 @@ def test_vllm_min_p_processor_falls_back_below_measured_fast_path():
 
     assert returned is logits
     assert torch.equal(logits, expected)
-    assert min_p_filter_launch_count() == 0
+    assert launch_count(Operator.MIN_P_FILTER) == 0
 
 
 def test_min_p_override_metadata_tracks_opt_in(monkeypatch):
@@ -534,8 +537,9 @@ def test_vllm_ir_dispatches_to_loom_provider():
     from vllm.platforms import current_platform
 
     from loom_kernels.torch_ops import (
-        add_rms_norm_rust_bridge_launch_count,
-        reset_add_rms_norm_rust_bridge_launch_count,
+        Operator,
+        launch_count,
+        reset_launch_count,
     )
 
     register_vllm_ir()
@@ -546,7 +550,7 @@ def test_vllm_ir_dispatches_to_loom_provider():
     weight = torch.ones(256, device="cuda", dtype=torch.bfloat16)
     expected_residual = (input_tensor.float() + residual.float()).to(torch.bfloat16)
 
-    reset_add_rms_norm_rust_bridge_launch_count()
+    reset_launch_count(Operator.ADD_RMS_NORM)
     with operation.set_priority([DEFAULT_PROVIDER, "native"]):
         assert (
             operation.dispatch(input_tensor, residual, weight, 1.0e-5).provider
@@ -559,7 +563,7 @@ def test_vllm_ir_dispatches_to_loom_provider():
 
     assert output is input_tensor
     assert residual_output is residual
-    assert add_rms_norm_rust_bridge_launch_count() == 1
+    assert launch_count(Operator.ADD_RMS_NORM) == 1
     torch.testing.assert_close(residual_output, expected_residual, rtol=0, atol=0)
 
 

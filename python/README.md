@@ -28,20 +28,19 @@ CUDA_HOME=/usr/local/cuda \
   python python/build_torch_extension.py
 ```
 
-Repository checkouts discover both libraries under `build/`. Packaged or
-externally managed deployments can set absolute paths explicitly:
+Repository checkouts discover the dispatcher under `build/`. Packaged or
+externally managed deployments can set its absolute path explicitly:
 
 ```bash
-export LOOM_KERNELS_CUDA_LIBRARY=/path/to/libloom_kernels_cuda.so
 export LOOM_KERNELS_TORCH_LIBRARY=/path/to/libloom_kernels_torch.so
 ```
 
-`build_native.py` also builds `libloom_cuda_bridge.so`. Keep that library next
-to `libloom_kernels_torch.so` (or in its parent directory) so the dispatcher's
-relative runtime search path can load it. Add+RMSNorm, RMSNorm+dynamic-FP8,
-and contiguous greedy+sampled-logprob calls use this checked Rust path.
-Stride-padded greedy rows and the remaining operator families currently use
-the raw CUDA library.
+`build_native.py` builds the only native backend library,
+`libloom_cuda_bridge.so`. Keep it next to `libloom_kernels_torch.so` (or in its
+parent directory) so the dispatcher's relative runtime search path can load
+it. Every operator, including padded logits and strided paged-cache views,
+enters checked borrowed Rust dispatch. There is no ctypes or direct raw-CUDA
+framework path.
 
 Automated binary wheels are not published yet.
 
@@ -72,7 +71,7 @@ buffers for capture-safe reuse.
 
 | Family | Python entry points |
 | --- | --- |
-| Normalization | `add_rms_norm_`, `rms_norm_dynamic_fp8`, `rms_norm_dynamic_fp8_out` |
+| Normalization | `rms_norm`, `rms_norm_out`, `add_rms_norm_`, `rms_norm_dynamic_fp8`, `rms_norm_dynamic_fp8_out` |
 | Activation | `silu_and_mul`, `silu_and_mul_out`, `silu_and_mul_dynamic_fp8`, `silu_and_mul_dynamic_fp8_out` |
 | Position and KV | `rope_paged_kv_write_` |
 | Decode tail | `greedy_sample_logprobs`, `selected_token_logprobs`, `min_p_filter_` |

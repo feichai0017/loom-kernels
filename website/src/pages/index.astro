@@ -46,16 +46,16 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 <span class="token-comment">// Contract → oracle → CUDA → engine gate</span></code></pre>
       <div class="pipeline" aria-label="Execution path">
         <div><span>01</span><strong>Contract</strong></div>
-        <div><span>02</span><strong>CUDA</strong></div>
-        <div><span>03</span><strong>Dispatch</strong></div>
-        <div><span>04</span><strong>Engine</strong></div>
+        <div><span>02</span><strong>Bridge</strong></div>
+        <div><span>03</span><strong>Safe Rust</strong></div>
+        <div><span>04</span><strong>CUDA</strong></div>
       </div>
     </div>
   </section>
 
   <section class="metrics-strip" aria-label="Project status">
     <div class="metric"><strong>10</strong><span>qualified operator paths</span></div>
-    <div class="metric"><strong>183/183</strong><span>H20 Python tests passing</span></div>
+    <div class="metric"><strong>Full</strong><span>H20 Python suite passing</span></div>
     <div class="metric"><strong>SM90</strong><span>NVIDIA H20 evidence</span></div>
     <div class="metric"><strong>0.24–0.25</strong><span>qualified vLLM range</span></div>
   </section>
@@ -92,12 +92,12 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
     <header class="section-header">
       <div>
         <p class="eyebrow">Architecture</p>
-        <h2>One contract.<br />Several consumers.</h2>
+        <h2>One contract.<br />One execution path.</h2>
       </div>
       <p>
-        The Rust core never calls accelerator code. CUDA backends either support
-        the exact contract or decline it. Framework adapters translate tensors
-        and streams without quietly changing policy.
+        Every framework operator crosses the same versioned bridge into safe
+        borrowed Rust dispatch. Adapters admit exact contracts before entering
+        Loom; they never select an alternate implementation inside the library.
       </p>
     </header>
 
@@ -109,18 +109,23 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
       </article>
       <article class="architecture-card">
         <span class="card-index">02 / loom-cuda-sys</span>
-        <h3>Stable raw boundary</h3>
-        <p>A dependency-light C ABI that keeps CUDA compilation out of public contracts.</p>
+        <h3>Internal launch boundary</h3>
+        <p>Packaged handwritten CUDA and a private ABI used only by the safe Rust backend.</p>
       </article>
       <article class="architecture-card">
         <span class="card-index">03 / loom-cuda</span>
         <h3>Safe execution</h3>
-        <p>Owned streams, buffers, events, checked dispatch, and oracle-backed benches.</p>
+        <p>Owned or borrowed streams and memory, explicit layouts, checked dispatch, and benches.</p>
       </article>
       <article class="architecture-card">
-        <span class="card-index">04 / adapters</span>
-        <h3>Engine-native invocation</h3>
-        <p>PyTorch current-stream operators, checked Rust borrowing, and narrow vLLM registration points.</p>
+        <span class="card-index">04 / loom-cuda-bridge</span>
+        <h3>Only framework boundary</h3>
+        <p>Versioned, panic-contained entrypoints from engine tensors into safe borrowed Rust.</p>
+      </article>
+      <article class="architecture-card">
+        <span class="card-index">05 / adapters</span>
+        <h3>Translation only</h3>
+        <p>PyTorch current-stream operators and narrow vLLM admission points without CUDA launches.</p>
       </article>
     </div>
   </section>

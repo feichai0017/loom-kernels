@@ -28,9 +28,8 @@ an oracle-checked CUDA path without cloning the repository.
 
 ## K0.6: Engine-Owned Runtime Interop
 
-Status: complete for Add+RMSNorm, RMSNorm+dynamic-FP8, and contiguous
-greedy+sampled-logprob vertical slices after `v1.0.0-alpha.1`; migration of
-other operators remains incremental.
+Status: complete for the framework operator surface after
+`v1.0.0-alpha.1`.
 
 - ~~generic safe backend over owned or borrowed CUDA streams~~;
 - ~~sealed read/write device-memory traits shared by owned buffers and borrowed
@@ -48,7 +47,11 @@ other operators remains incremental.
 - ~~move one proven decode-tail engine path through checked Rust~~ — contiguous
   greedy+sampled-logprob now uses typed borrowed Rust views, exact buffer
   lengths, disjoint-output validation, and the framework current stream;
-  padded vocabulary rows preserve the existing stride-aware raw ABI fallback.
+- ~~route every remaining PyTorch operator through the same boundary~~ —
+  standalone RMSNorm, activation/FP8, padded logits, selected-token logprobs,
+  Min-P, RoPE+paged-KV, and base/split-K paged decode now use explicit Rust
+  layout contracts; the ctypes, direct-CUDA, and unchecked dispatcher paths
+  were removed as a breaking change.
 
 Exit: an inference-engine call reaches checked Rust dispatch using its existing
 tensor memory and CUDA stream, with no hidden copy, allocation, or ownership

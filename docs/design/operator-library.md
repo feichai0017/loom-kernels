@@ -11,7 +11,7 @@ tokenization, KV lifetime, or request serving.
 | Layer | Responsibility |
 | --- | --- |
 | `loom-kernels` | dtype, shape/layout, aliasing, capability, and reference contracts |
-| `loom-cuda-sys` | stable C ABI, CUDA compilation, and packaged handwritten kernels |
+| `loom-cuda-sys` | internal launch ABI, CUDA compilation, and packaged handwritten kernels |
 | `loom-cuda` | safe owned/borrowed CUDA resources, validation, dispatch, and benchmarks |
 | `loom-cuda-bridge` | panic-contained checked C entrypoints into borrowed Rust dispatch |
 | engine adapters | translate engine tensors/streams without owning engine policy |
@@ -42,20 +42,20 @@ boundary is crossed, ordinary callers cannot invent alternative trait
 implementations or pass read-only storage as a mutable output. Kernel launches
 remain asynchronous.
 
-The pure-Rust H20 smoke test exercises this zero-copy path. Add+RMSNorm,
-RMSNorm+FP8, and contiguous greedy+sampled-logprob calls also close real
-framework gates: the C++ PyTorch dispatcher passes tensor pointers, actual
-element counts, and PyTorch's current stream through `loom-cuda-bridge`, which
-constructs borrowed Rust views and calls the same safe `CudaBackend` methods.
-The bridge validates lengths, alignment, address overflow, and non-overlap,
-contains Rust panics behind a status ABI, and keeps a thread-local detailed
-error. It does not allocate, copy, synchronize, free, or destroy framework
-resources.
+The pure-Rust H20 smoke test exercises this zero-copy path. Every framework
+operator uses the same mechanism: the C++ PyTorch dispatcher passes tensor
+pointers, physical storage spans, layout strides, and PyTorch's current stream
+through `loom-cuda-bridge`, which constructs borrowed Rust views and calls safe
+`CudaBackend` methods. The bridge validates lengths, alignment, address
+overflow, layouts, and non-overlap, contains Rust panics behind a versioned
+status ABI, and keeps a thread-local detailed error. It does not copy,
+synchronize, free, or destroy framework resources. The paged-decode bridge may
+request an exact caller-owned split-K workspace, which PyTorch allocates before
+launch.
 
-This is deliberately an operator-by-operator migration. Greedy logits with a
-padded row stride continue through the existing stride-aware raw ABI.
-Activation, RoPE/KV, selected-token logprobs, Min-P, and paged-decode framework
-paths also still call the raw CUDA C ABI directly.
+The raw CUDA ABI exists only below safe Rust as an internal kernel-launch
+layer. Framework code cannot bypass Rust validation, and no parallel ctypes,
+unchecked, or direct-CUDA adapter is retained.
 
 ## Add+RMSNorm Contract
 

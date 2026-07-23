@@ -1,4 +1,3 @@
-#include "loom_cuda.h"
 #include "loom_cuda_bridge.h"
 
 #include <ATen/ATen.h>
@@ -6,7 +5,6 @@
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/library.h>
 
-#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -16,12 +14,44 @@
 
 namespace {
 
-std::atomic<int64_t> vllm_silu_and_mul_per_block_fp8_launches{0};
-std::atomic<int64_t> rope_paged_kv_write_launches{0};
-std::atomic<int64_t> greedy_sample_logprobs_launches{0};
-std::atomic<int64_t> selected_token_logprobs_launches{0};
-std::atomic<int64_t> min_p_filter_launches{0};
-std::atomic<int64_t> paged_decode_attention_launches{0};
+uint32_t bridge_dtype(const at::Tensor& tensor) {
+  if (tensor.scalar_type() == at::kFloat) {
+    return LOOM_CUDA_BRIDGE_F32;
+  }
+  if (tensor.scalar_type() == at::kHalf) {
+    return LOOM_CUDA_BRIDGE_F16;
+  }
+  if (tensor.scalar_type() == at::kBFloat16) {
+    return LOOM_CUDA_BRIDGE_BF16;
+  }
+  TORCH_CHECK(false, "unsupported Loom bridge dtype");
+}
+
+uint64_t storage_span_elements(const at::Tensor& tensor) {
+  TORCH_CHECK(tensor.numel() > 0,
+              "Loom bridge tensors must contain at least one element");
+  uint64_t span = 1;
+  for (int64_t dimension = 0; dimension < tensor.dim(); ++dimension) {
+    TORCH_CHECK(tensor.size(dimension) > 0 && tensor.stride(dimension) > 0,
+                "Loom bridge requires positive tensor sizes and strides");
+    const auto extent =
+        static_cast<uint64_t>(tensor.size(dimension) - 1);
+    const auto stride = static_cast<uint64_t>(tensor.stride(dimension));
+    TORCH_CHECK(
+        extent == 0 ||
+            stride <=
+                (std::numeric_limits<uint64_t>::max() - span) / extent,
+        "Loom tensor storage span exceeds the bridge ABI");
+    span += extent * stride;
+  }
+  return span;
+}
+
+void check_bridge_status(int status, const char* operation) {
+  TORCH_CHECK(status == LOOM_CUDA_BRIDGE_SUCCESS, "Loom Rust ", operation,
+              " bridge failed: ", loom_cuda_bridge_last_error_message(),
+              " (status ", status, ")");
+}
 
 bool byte_ranges_overlap(const at::Tensor& left, const at::Tensor& right) {
   const auto left_begin = reinterpret_cast<uintptr_t>(left.data_ptr());
@@ -41,6 +71,59 @@ bool has_dense_nhd_inner_strides(const at::Tensor& tensor) {
          tensor.stride(2) == tensor.size(3) &&
          tensor.stride(1) == tensor.size(2) * tensor.size(3) &&
          tensor.stride(0) >= block_elements;
+}
+
+void check_rms_norm_contract(const at::Tensor& input,
+                             const at::Tensor& weight,
+                             const at::Tensor& output, double epsilon) {
+  TORCH_CHECK(input.is_cuda(), "Loom RMSNorm input must be CUDA");
+  TORCH_CHECK(weight.device() == input.device() &&
+                  output.device() == input.device(),
+              "Loom RMSNorm tensors must be on the same CUDA device");
+  TORCH_CHECK(input.scalar_type() == weight.scalar_type() &&
+                  output.scalar_type() == input.scalar_type(),
+              "Loom RMSNorm tensors must have matching dtypes");
+  TORCH_CHECK(input.scalar_type() == at::kFloat ||
+                  input.scalar_type() == at::kHalf ||
+                  input.scalar_type() == at::kBFloat16,
+              "Loom RMSNorm supports F32, FP16, and BF16");
+  TORCH_CHECK(input.is_contiguous() && weight.is_contiguous() &&
+                  output.is_contiguous(),
+              "Loom RMSNorm tensors must be contiguous");
+  TORCH_CHECK(input.dim() >= 1 && input.numel() > 0,
+              "Loom RMSNorm input must be non-empty");
+  TORCH_CHECK(weight.dim() == 1 && weight.size(0) == input.size(-1),
+              "Loom RMSNorm weight must match the hidden dimension");
+  TORCH_CHECK(output.sizes() == input.sizes(),
+              "Loom RMSNorm output shape must match input");
+  TORCH_CHECK(std::isfinite(epsilon) && epsilon > 0.0,
+              "Loom RMSNorm epsilon must be finite and positive");
+  TORCH_CHECK(!input.requires_grad() && !weight.requires_grad(),
+              "Loom RMSNorm is an inference-only operator");
+  TORCH_CHECK(!byte_ranges_overlap(output, input) &&
+                  !byte_ranges_overlap(output, weight),
+              "Loom RMSNorm output storage must not overlap inputs");
+}
+
+void rms_norm(const at::Tensor& input, const at::Tensor& weight,
+              at::Tensor output, double epsilon) {
+  check_rms_norm_contract(input, weight, output, epsilon);
+  const int64_t hidden_size_i64 = input.size(-1);
+  const int64_t rows_i64 = input.numel() / hidden_size_i64;
+  TORCH_CHECK(rows_i64 <= std::numeric_limits<uint32_t>::max() &&
+                  hidden_size_i64 <= std::numeric_limits<uint32_t>::max(),
+              "Loom RMSNorm shape exceeds the bridge ABI");
+  const c10::cuda::CUDAGuard device_guard(input.device());
+  const auto stream = at::cuda::getCurrentCUDAStream(input.device().index());
+  const int status = loom_cuda_bridge_rms_norm(
+      bridge_dtype(input), input.data_ptr(),
+      static_cast<uint64_t>(input.numel()), weight.data_ptr(),
+      static_cast<uint64_t>(weight.numel()), output.data_ptr(),
+      static_cast<uint64_t>(output.numel()),
+      static_cast<uint32_t>(rows_i64),
+      static_cast<uint32_t>(hidden_size_i64), static_cast<float>(epsilon),
+      stream.stream());
+  check_bridge_status(status, "RMSNorm");
 }
 
 void check_contract(const at::Tensor& input, const at::Tensor& residual,
@@ -89,32 +172,11 @@ void launch_add_rms_norm(at::Tensor input, at::Tensor residual,
   const auto residual_elements = static_cast<uint64_t>(residual.numel());
   const auto weight_elements = static_cast<uint64_t>(weight.numel());
   const auto epsilon_f32 = static_cast<float>(epsilon);
-  int status = LOOM_CUDA_BRIDGE_UNSUPPORTED;
-  if (input.scalar_type() == at::kFloat) {
-    status = loom_cuda_bridge_add_rms_norm_f32(
-        input.data_ptr<float>(), input_elements, residual.data_ptr<float>(),
-        residual_elements, weight.data_ptr<float>(), weight_elements, rows,
-        hidden_size, epsilon_f32, stream.stream());
-  } else if (input.scalar_type() == at::kHalf) {
-    status = loom_cuda_bridge_add_rms_norm_f16(
-        reinterpret_cast<uint16_t*>(input.data_ptr<at::Half>()),
-        input_elements,
-        reinterpret_cast<uint16_t*>(residual.data_ptr<at::Half>()),
-        residual_elements,
-        reinterpret_cast<const uint16_t*>(weight.data_ptr<at::Half>()),
-        weight_elements, rows, hidden_size, epsilon_f32, stream.stream());
-  } else if (input.scalar_type() == at::kBFloat16) {
-    status = loom_cuda_bridge_add_rms_norm_bf16(
-        reinterpret_cast<uint16_t*>(input.data_ptr<at::BFloat16>()),
-        input_elements,
-        reinterpret_cast<uint16_t*>(residual.data_ptr<at::BFloat16>()),
-        residual_elements,
-        reinterpret_cast<const uint16_t*>(weight.data_ptr<at::BFloat16>()),
-        weight_elements, rows, hidden_size, epsilon_f32, stream.stream());
-  }
-  TORCH_CHECK(status == LOOM_CUDA_BRIDGE_SUCCESS,
-              "Loom Rust Add+RMSNorm bridge failed: ",
-              loom_cuda_bridge_last_error_message(), " (status ", status, ")");
+  const int status = loom_cuda_bridge_add_rms_norm(
+      bridge_dtype(input), input.data_ptr(), input_elements,
+      residual.data_ptr(), residual_elements, weight.data_ptr(),
+      weight_elements, rows, hidden_size, epsilon_f32, stream.stream());
+  check_bridge_status(status, "Add+RMSNorm");
 }
 
 void add_rms_norm_mut(at::Tensor input, at::Tensor residual,
@@ -185,30 +247,12 @@ void launch_rms_norm_dynamic_fp8(const at::Tensor& input,
   const auto epsilon_f32 = static_cast<float>(epsilon);
   auto* output_bytes = reinterpret_cast<uint8_t*>(output.data_ptr());
   auto* scale_values = scales.data_ptr<float>();
-  int status = LOOM_CUDA_BRIDGE_UNSUPPORTED;
-  if (input.scalar_type() == at::kFloat) {
-    status = loom_cuda_bridge_rms_norm_dynamic_fp8_f32(
-        input.data_ptr<float>(), input_elements, weight.data_ptr<float>(),
-        weight_elements, output_bytes, output_elements, scale_values,
-        scale_elements, rows, hidden_size, epsilon_f32, stream.stream());
-  } else if (input.scalar_type() == at::kHalf) {
-    status = loom_cuda_bridge_rms_norm_dynamic_fp8_f16(
-        reinterpret_cast<const uint16_t*>(input.data_ptr<at::Half>()),
-        input_elements,
-        reinterpret_cast<const uint16_t*>(weight.data_ptr<at::Half>()),
-        weight_elements, output_bytes, output_elements, scale_values,
-        scale_elements, rows, hidden_size, epsilon_f32, stream.stream());
-  } else if (input.scalar_type() == at::kBFloat16) {
-    status = loom_cuda_bridge_rms_norm_dynamic_fp8_bf16(
-        reinterpret_cast<const uint16_t*>(input.data_ptr<at::BFloat16>()),
-        input_elements,
-        reinterpret_cast<const uint16_t*>(weight.data_ptr<at::BFloat16>()),
-        weight_elements, output_bytes, output_elements, scale_values,
-        scale_elements, rows, hidden_size, epsilon_f32, stream.stream());
-  }
-  TORCH_CHECK(status == LOOM_CUDA_BRIDGE_SUCCESS,
-              "Loom Rust RMSNorm+FP8 bridge failed: ",
-              loom_cuda_bridge_last_error_message(), " (status ", status, ")");
+  const int status = loom_cuda_bridge_rms_norm_dynamic_fp8(
+      bridge_dtype(input), input.data_ptr(), input_elements,
+      weight.data_ptr(), weight_elements, output_bytes, output_elements,
+      scale_values, scale_elements, rows, hidden_size, epsilon_f32,
+      stream.stream());
+  check_bridge_status(status, "RMSNorm+FP8");
 }
 
 void rms_norm_dynamic_fp8(const at::Tensor& input, const at::Tensor& weight,
@@ -258,25 +302,11 @@ void launch_silu_and_mul(const at::Tensor& input, at::Tensor output) {
   const auto stream = at::cuda::getCurrentCUDAStream(input.device().index());
   const auto rows = static_cast<uint32_t>(rows_i64);
   const auto width = static_cast<uint32_t>(width_i64);
-  int status = LOOM_CUDA_UNSUPPORTED;
-  if (input.scalar_type() == at::kFloat) {
-    status = loom_cuda_silu_and_mul_f32(
-        input.data_ptr<float>(), output.data_ptr<float>(), rows, width,
-        stream.stream());
-  } else if (input.scalar_type() == at::kHalf) {
-    status = loom_cuda_silu_and_mul_f16(
-        reinterpret_cast<const uint16_t*>(input.data_ptr<at::Half>()),
-        reinterpret_cast<uint16_t*>(output.data_ptr<at::Half>()), rows, width,
-        stream.stream());
-  } else if (input.scalar_type() == at::kBFloat16) {
-    status = loom_cuda_silu_and_mul_bf16(
-        reinterpret_cast<const uint16_t*>(input.data_ptr<at::BFloat16>()),
-        reinterpret_cast<uint16_t*>(output.data_ptr<at::BFloat16>()), rows,
-        width, stream.stream());
-  }
-  TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
-              "Loom CUDA SiLU-and-Mul launch failed: ",
-              loom_cuda_status_string(status), " (status ", status, ")");
+  const int status = loom_cuda_bridge_silu_and_mul(
+      bridge_dtype(input), input.data_ptr(),
+      static_cast<uint64_t>(input.numel()), output.data_ptr(),
+      static_cast<uint64_t>(output.numel()), rows, width, stream.stream());
+  check_bridge_status(status, "SiLU-and-Mul");
 }
 
 void silu_and_mul(const at::Tensor& input, at::Tensor output) {
@@ -357,21 +387,14 @@ void launch_silu_and_mul_dynamic_fp8_layout(
   auto* scale_values = scales.data_ptr<float>();
   const float* scale_ub_value =
       scale_ub.has_value() ? scale_ub->data_ptr<float>() : nullptr;
-  int status = LOOM_CUDA_UNSUPPORTED;
-  if (input.scalar_type() == at::kHalf) {
-    status = loom_cuda_silu_and_mul_dynamic_fp8_f16(
-        reinterpret_cast<const uint16_t*>(input.data_ptr<at::Half>()),
-        output_bytes, scale_values, rows, width, group_size, scale_ub_value,
-        scales_transposed ? 1U : 0U, stream.stream());
-  } else if (input.scalar_type() == at::kBFloat16) {
-    status = loom_cuda_silu_and_mul_dynamic_fp8_bf16(
-        reinterpret_cast<const uint16_t*>(input.data_ptr<at::BFloat16>()),
-        output_bytes, scale_values, rows, width, group_size, scale_ub_value,
-        scales_transposed ? 1U : 0U, stream.stream());
-  }
-  TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
-              "Loom CUDA SiLU-and-Mul+FP8 launch failed: ",
-              loom_cuda_status_string(status), " (status ", status, ")");
+  const int status = loom_cuda_bridge_silu_and_mul_dynamic_fp8(
+      bridge_dtype(input), input.data_ptr(),
+      static_cast<uint64_t>(input.numel()), output_bytes,
+      static_cast<uint64_t>(output.numel()), scale_values,
+      static_cast<uint64_t>(scales.numel()), scale_ub_value,
+      scale_ub.has_value() ? static_cast<uint64_t>(scale_ub->numel()) : 0U,
+      rows, width, group_size, scales_transposed ? 1U : 0U, stream.stream());
+  check_bridge_status(status, "SiLU-and-Mul+FP8");
 }
 
 void launch_silu_and_mul_dynamic_fp8(const at::Tensor& input,
@@ -401,26 +424,6 @@ void vllm_silu_and_mul_per_block_fp8(
   }
   launch_silu_and_mul_dynamic_fp8_layout(input, output, scales, group_size,
                                          scale_ub, scales_transposed);
-  vllm_silu_and_mul_per_block_fp8_launches.fetch_add(
-      1, std::memory_order_relaxed);
-}
-
-int64_t vllm_silu_and_mul_per_block_fp8_launch_count() {
-  return vllm_silu_and_mul_per_block_fp8_launches.load(
-      std::memory_order_relaxed);
-}
-
-void reset_vllm_silu_and_mul_per_block_fp8_launch_count() {
-  vllm_silu_and_mul_per_block_fp8_launches.store(0,
-                                                 std::memory_order_relaxed);
-}
-
-int64_t rope_paged_kv_write_launch_count() {
-  return rope_paged_kv_write_launches.load(std::memory_order_relaxed);
-}
-
-void reset_rope_paged_kv_write_launch_count() {
-  rope_paged_kv_write_launches.store(0, std::memory_order_relaxed);
 }
 
 void check_greedy_sample_logprobs_shape(const at::Tensor& logits) {
@@ -450,10 +453,8 @@ launch_greedy_sample_logprobs(const at::Tensor& logits) {
   const auto rows = static_cast<uint32_t>(logits.size(0));
   const auto vocab_size = static_cast<uint32_t>(logits.size(1));
   const auto row_stride = static_cast<uint64_t>(logits.stride(0));
-  const auto logits_elements = static_cast<uint64_t>(logits.numel());
+  const auto logits_elements = storage_span_elements(logits);
   const auto output_elements = static_cast<uint64_t>(logits.size(0));
-  const bool use_rust_bridge =
-      row_stride == static_cast<uint64_t>(vocab_size);
   at::Tensor token_ids =
       at::empty({logits.size(0)}, logits.options().dtype(at::kInt));
   at::Tensor logprobs =
@@ -463,61 +464,12 @@ launch_greedy_sample_logprobs(const at::Tensor& logits) {
 
   const c10::cuda::CUDAGuard device_guard(logits.device());
   const auto stream = at::cuda::getCurrentCUDAStream(logits.device().index());
-  int status = LOOM_CUDA_UNSUPPORTED;
-  if (logits.scalar_type() == at::kFloat) {
-    if (use_rust_bridge) {
-      status = loom_cuda_bridge_greedy_sample_logprobs_f32(
-          logits.data_ptr<float>(), logits_elements,
-          token_ids.data_ptr<int32_t>(), output_elements,
-          logprobs.data_ptr<float>(), output_elements, ranks.data_ptr<int64_t>(),
-          output_elements, rows, vocab_size, stream.stream());
-    } else {
-      status = loom_cuda_greedy_sample_logprobs_f32(
-          logits.data_ptr<float>(), token_ids.data_ptr<int32_t>(),
-          logprobs.data_ptr<float>(), ranks.data_ptr<int64_t>(), rows,
-          vocab_size, row_stride, stream.stream());
-    }
-  } else if (logits.scalar_type() == at::kHalf) {
-    if (use_rust_bridge) {
-      status = loom_cuda_bridge_greedy_sample_logprobs_f16(
-          reinterpret_cast<const uint16_t*>(logits.data_ptr<at::Half>()),
-          logits_elements, token_ids.data_ptr<int32_t>(), output_elements,
-          logprobs.data_ptr<float>(), output_elements, ranks.data_ptr<int64_t>(),
-          output_elements, rows, vocab_size, stream.stream());
-    } else {
-      status = loom_cuda_greedy_sample_logprobs_f16(
-          reinterpret_cast<const uint16_t*>(logits.data_ptr<at::Half>()),
-          token_ids.data_ptr<int32_t>(), logprobs.data_ptr<float>(),
-          ranks.data_ptr<int64_t>(), rows, vocab_size, row_stride,
-          stream.stream());
-    }
-  } else if (logits.scalar_type() == at::kBFloat16) {
-    if (use_rust_bridge) {
-      status = loom_cuda_bridge_greedy_sample_logprobs_bf16(
-          reinterpret_cast<const uint16_t*>(
-              logits.data_ptr<at::BFloat16>()),
-          logits_elements, token_ids.data_ptr<int32_t>(), output_elements,
-          logprobs.data_ptr<float>(), output_elements, ranks.data_ptr<int64_t>(),
-          output_elements, rows, vocab_size, stream.stream());
-    } else {
-      status = loom_cuda_greedy_sample_logprobs_bf16(
-          reinterpret_cast<const uint16_t*>(logits.data_ptr<at::BFloat16>()),
-          token_ids.data_ptr<int32_t>(), logprobs.data_ptr<float>(),
-          ranks.data_ptr<int64_t>(), rows, vocab_size, row_stride,
-          stream.stream());
-    }
-  }
-  if (use_rust_bridge) {
-    TORCH_CHECK(status == LOOM_CUDA_BRIDGE_SUCCESS,
-                "Loom Rust greedy-sampling bridge failed: ",
-                loom_cuda_bridge_last_error_message(), " (status ", status,
-                ")");
-  } else {
-    TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
-                "Loom CUDA greedy sampling launch failed: ",
-                loom_cuda_status_string(status), " (status ", status, ")");
-  }
-  greedy_sample_logprobs_launches.fetch_add(1, std::memory_order_relaxed);
+  const int status = loom_cuda_bridge_greedy_sample_logprobs(
+      bridge_dtype(logits), logits.data_ptr(), logits_elements,
+      token_ids.data_ptr<int32_t>(), output_elements,
+      logprobs.data_ptr<float>(), output_elements, ranks.data_ptr<int64_t>(),
+      output_elements, rows, vocab_size, row_stride, stream.stream());
+  check_bridge_status(status, "greedy-sampling");
   return {token_ids, logprobs, ranks};
 }
 
@@ -535,14 +487,6 @@ std::tuple<at::Tensor, at::Tensor, at::Tensor> greedy_sample_logprobs_meta(
       at::empty({logits.size(0)}, logits.options().dtype(at::kFloat)),
       at::empty({logits.size(0)}, logits.options().dtype(at::kLong)),
   };
-}
-
-int64_t greedy_sample_logprobs_launch_count() {
-  return greedy_sample_logprobs_launches.load(std::memory_order_relaxed);
-}
-
-void reset_greedy_sample_logprobs_launch_count() {
-  greedy_sample_logprobs_launches.store(0, std::memory_order_relaxed);
 }
 
 void check_selected_token_logprobs_shape(const at::Tensor& logits,
@@ -578,29 +522,13 @@ std::tuple<at::Tensor, at::Tensor> launch_selected_token_logprobs(
 
   const c10::cuda::CUDAGuard device_guard(logits.device());
   const auto stream = at::cuda::getCurrentCUDAStream(logits.device().index());
-  int status = LOOM_CUDA_UNSUPPORTED;
-  if (logits.scalar_type() == at::kFloat) {
-    status = loom_cuda_selected_token_logprobs_f32(
-        logits.data_ptr<float>(), token_ids.data_ptr<int64_t>(),
-        logprobs.data_ptr<float>(), ranks.data_ptr<int64_t>(), rows, vocab_size,
-        row_stride, stream.stream());
-  } else if (logits.scalar_type() == at::kHalf) {
-    status = loom_cuda_selected_token_logprobs_f16(
-        reinterpret_cast<const uint16_t*>(logits.data_ptr<at::Half>()),
-        token_ids.data_ptr<int64_t>(), logprobs.data_ptr<float>(),
-        ranks.data_ptr<int64_t>(), rows, vocab_size, row_stride,
-        stream.stream());
-  } else if (logits.scalar_type() == at::kBFloat16) {
-    status = loom_cuda_selected_token_logprobs_bf16(
-        reinterpret_cast<const uint16_t*>(logits.data_ptr<at::BFloat16>()),
-        token_ids.data_ptr<int64_t>(), logprobs.data_ptr<float>(),
-        ranks.data_ptr<int64_t>(), rows, vocab_size, row_stride,
-        stream.stream());
-  }
-  TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
-              "Loom CUDA selected-token logprob launch failed: ",
-              loom_cuda_status_string(status), " (status ", status, ")");
-  selected_token_logprobs_launches.fetch_add(1, std::memory_order_relaxed);
+  const auto output_elements = static_cast<uint64_t>(logits.size(0));
+  const int status = loom_cuda_bridge_selected_token_logprobs(
+      bridge_dtype(logits), logits.data_ptr(), storage_span_elements(logits),
+      token_ids.data_ptr<int64_t>(), static_cast<uint64_t>(token_ids.numel()),
+      logprobs.data_ptr<float>(), output_elements, ranks.data_ptr<int64_t>(),
+      output_elements, rows, vocab_size, row_stride, stream.stream());
+  check_bridge_status(status, "selected-token logprob");
   return {logprobs, ranks};
 }
 
@@ -617,14 +545,6 @@ std::tuple<at::Tensor, at::Tensor> selected_token_logprobs_meta(
       at::empty({logits.size(0)}, logits.options().dtype(at::kFloat)),
       at::empty({logits.size(0)}, logits.options().dtype(at::kLong)),
   };
-}
-
-int64_t selected_token_logprobs_launch_count() {
-  return selected_token_logprobs_launches.load(std::memory_order_relaxed);
-}
-
-void reset_selected_token_logprobs_launch_count() {
-  selected_token_logprobs_launches.store(0, std::memory_order_relaxed);
 }
 
 void check_min_p_filter_shape(const at::Tensor& logits,
@@ -669,37 +589,16 @@ void launch_min_p_filter(at::Tensor logits, const at::Tensor& min_p) {
   const auto row_stride = static_cast<uint64_t>(logits.stride(0));
   const c10::cuda::CUDAGuard device_guard(logits.device());
   const auto stream = at::cuda::getCurrentCUDAStream(logits.device().index());
-  int status = LOOM_CUDA_UNSUPPORTED;
-  if (logits.scalar_type() == at::kFloat) {
-    status = loom_cuda_min_p_filter_f32(
-        logits.data_ptr<float>(), min_p.data_ptr<float>(), rows, vocab_size,
-        row_stride, stream.stream());
-  } else if (logits.scalar_type() == at::kHalf) {
-    status = loom_cuda_min_p_filter_f16(
-        reinterpret_cast<uint16_t*>(logits.data_ptr<at::Half>()),
-        min_p.data_ptr<float>(), rows, vocab_size, row_stride, stream.stream());
-  } else if (logits.scalar_type() == at::kBFloat16) {
-    status = loom_cuda_min_p_filter_bf16(
-        reinterpret_cast<uint16_t*>(logits.data_ptr<at::BFloat16>()),
-        min_p.data_ptr<float>(), rows, vocab_size, row_stride, stream.stream());
-  }
-  TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
-              "Loom CUDA min-p launch failed: ",
-              loom_cuda_status_string(status), " (status ", status, ")");
-  min_p_filter_launches.fetch_add(1, std::memory_order_relaxed);
+  const int status = loom_cuda_bridge_min_p_filter(
+      bridge_dtype(logits), logits.data_ptr(), storage_span_elements(logits),
+      min_p.data_ptr<float>(), static_cast<uint64_t>(min_p.numel()), rows,
+      vocab_size, row_stride, stream.stream());
+  check_bridge_status(status, "min-p");
 }
 
 void min_p_filter(at::Tensor logits, const at::Tensor& min_p) {
   check_min_p_filter_contract(logits, min_p);
   launch_min_p_filter(logits, min_p);
-}
-
-int64_t min_p_filter_launch_count() {
-  return min_p_filter_launches.load(std::memory_order_relaxed);
-}
-
-void reset_min_p_filter_launch_count() {
-  min_p_filter_launches.store(0, std::memory_order_relaxed);
 }
 
 void check_rope_paged_kv_write_contract(
@@ -832,58 +731,23 @@ void launch_rope_paged_kv_write(
   const auto value_cache_head_stride =
       static_cast<uint64_t>(value_cache.stride(2));
 
-  int status = LOOM_CUDA_UNSUPPORTED;
-  if (query.scalar_type() == at::kFloat) {
-    status = loom_cuda_rope_paged_kv_write_f32(
-        query.data_ptr<float>(), key.data_ptr<float>(), value.data_ptr<float>(),
-        positions.data_ptr<int64_t>(), cos_sin_cache.data_ptr<float>(),
-        key_cache.data_ptr<float>(), value_cache.data_ptr<float>(),
-        slot_mapping.data_ptr<int64_t>(), tokens, cache_tokens, query_heads,
-        kv_heads, head_size, value_head_size, rotary_dim, max_position,
-        num_blocks, block_size, query_token_stride, query_head_stride,
-        key_token_stride, key_head_stride, value_token_stride,
-        value_head_stride, key_block_stride, key_page_stride,
-        key_cache_head_stride, value_block_stride, value_page_stride,
-        value_cache_head_stride, is_neox ? 1U : 0U, stream.stream());
-  } else if (query.scalar_type() == at::kHalf) {
-    status = loom_cuda_rope_paged_kv_write_f16(
-        reinterpret_cast<uint16_t*>(query.data_ptr<at::Half>()),
-        reinterpret_cast<uint16_t*>(key.data_ptr<at::Half>()),
-        reinterpret_cast<const uint16_t*>(value.data_ptr<at::Half>()),
-        positions.data_ptr<int64_t>(),
-        reinterpret_cast<const uint16_t*>(
-            cos_sin_cache.data_ptr<at::Half>()),
-        reinterpret_cast<uint16_t*>(key_cache.data_ptr<at::Half>()),
-        reinterpret_cast<uint16_t*>(value_cache.data_ptr<at::Half>()),
-        slot_mapping.data_ptr<int64_t>(), tokens, cache_tokens, query_heads,
-        kv_heads, head_size, value_head_size, rotary_dim, max_position,
-        num_blocks, block_size, query_token_stride, query_head_stride,
-        key_token_stride, key_head_stride, value_token_stride,
-        value_head_stride, key_block_stride, key_page_stride,
-        key_cache_head_stride, value_block_stride, value_page_stride,
-        value_cache_head_stride, is_neox ? 1U : 0U, stream.stream());
-  } else if (query.scalar_type() == at::kBFloat16) {
-    status = loom_cuda_rope_paged_kv_write_bf16(
-        reinterpret_cast<uint16_t*>(query.data_ptr<at::BFloat16>()),
-        reinterpret_cast<uint16_t*>(key.data_ptr<at::BFloat16>()),
-        reinterpret_cast<const uint16_t*>(value.data_ptr<at::BFloat16>()),
-        positions.data_ptr<int64_t>(),
-        reinterpret_cast<const uint16_t*>(
-            cos_sin_cache.data_ptr<at::BFloat16>()),
-        reinterpret_cast<uint16_t*>(key_cache.data_ptr<at::BFloat16>()),
-        reinterpret_cast<uint16_t*>(value_cache.data_ptr<at::BFloat16>()),
-        slot_mapping.data_ptr<int64_t>(), tokens, cache_tokens, query_heads,
-        kv_heads, head_size, value_head_size, rotary_dim, max_position,
-        num_blocks, block_size, query_token_stride, query_head_stride,
-        key_token_stride, key_head_stride, value_token_stride,
-        value_head_stride, key_block_stride, key_page_stride,
-        key_cache_head_stride, value_block_stride, value_page_stride,
-        value_cache_head_stride, is_neox ? 1U : 0U, stream.stream());
-  }
-  TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
-              "Loom CUDA RoPE+paged-KV launch failed: ",
-              loom_cuda_status_string(status), " (status ", status, ")");
-  rope_paged_kv_write_launches.fetch_add(1, std::memory_order_relaxed);
+  const int status = loom_cuda_bridge_rope_paged_kv_write(
+      bridge_dtype(query), query.data_ptr(), storage_span_elements(query),
+      key.data_ptr(), storage_span_elements(key), value.data_ptr(),
+      storage_span_elements(value), positions.data_ptr<int64_t>(),
+      static_cast<uint64_t>(positions.numel()), cos_sin_cache.data_ptr(),
+      static_cast<uint64_t>(cos_sin_cache.numel()), key_cache.data_ptr(),
+      storage_span_elements(key_cache), value_cache.data_ptr(),
+      storage_span_elements(value_cache), slot_mapping.data_ptr<int64_t>(),
+      static_cast<uint64_t>(slot_mapping.numel()), tokens, cache_tokens,
+      query_heads, kv_heads, head_size, value_head_size, rotary_dim,
+      max_position, num_blocks, block_size, query_token_stride,
+      query_head_stride, key_token_stride, key_head_stride,
+      value_token_stride, value_head_stride, key_block_stride,
+      key_page_stride, key_cache_head_stride, value_block_stride,
+      value_page_stride, value_cache_head_stride, is_neox ? 1U : 0U,
+      stream.stream());
+  check_bridge_status(status, "RoPE+paged-KV");
 }
 
 void rope_paged_kv_write(
@@ -1007,10 +871,12 @@ void launch_paged_decode_attention(
   const auto scale_f32 = static_cast<float>(scale);
   const c10::cuda::CUDAGuard device_guard(query.device());
   const auto stream = at::cuda::getCurrentCUDAStream(query.device().index());
-  const auto split_k_workspace_elements =
-      loom_cuda_paged_decode_attention_split_k_workspace_elements(
-          sequences, query_heads, kv_heads, head_size, value_head_size,
-          max_context);
+  uint64_t split_k_workspace_elements = 0;
+  int status = loom_cuda_bridge_paged_decode_workspace_elements(
+      bridge_dtype(query), sequences, query_heads, kv_heads, head_size,
+      value_head_size, num_blocks, block_size, max_blocks_per_sequence,
+      max_context, scale_f32, &split_k_workspace_elements);
+  check_bridge_status(status, "paged decode workspace query");
   TORCH_CHECK(split_k_workspace_elements <=
                   static_cast<uint64_t>(
                       std::numeric_limits<int64_t>::max()),
@@ -1025,88 +891,20 @@ void launch_paged_decode_attention(
       split_k_workspace.defined() ? split_k_workspace.data_ptr<float>()
                                   : nullptr;
 
-  int status = LOOM_CUDA_UNSUPPORTED;
-  if (query.scalar_type() == at::kFloat) {
-    if (split_k_workspace_pointer != nullptr) {
-      status = loom_cuda_paged_decode_attention_split_k_f32(
-          query.data_ptr<float>(), key_cache.data_ptr<float>(),
-          value_cache.data_ptr<float>(), block_tables.data_ptr<int32_t>(),
-          sequence_lengths.data_ptr<int32_t>(), output.data_ptr<float>(),
-          split_k_workspace_pointer, split_k_workspace_elements, sequences,
-          query_heads, kv_heads, head_size, value_head_size, num_blocks,
-          block_size, key_block_stride, value_block_stride,
-          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
-    } else {
-      status = loom_cuda_paged_decode_attention_f32(
-          query.data_ptr<float>(), key_cache.data_ptr<float>(),
-          value_cache.data_ptr<float>(), block_tables.data_ptr<int32_t>(),
-          sequence_lengths.data_ptr<int32_t>(), output.data_ptr<float>(),
-          sequences, query_heads, kv_heads, head_size, value_head_size,
-          num_blocks, block_size, key_block_stride, value_block_stride,
-          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
-    }
-  } else if (query.scalar_type() == at::kHalf) {
-    if (split_k_workspace_pointer != nullptr) {
-      status = loom_cuda_paged_decode_attention_split_k_f16(
-          reinterpret_cast<const uint16_t*>(query.data_ptr<at::Half>()),
-          reinterpret_cast<const uint16_t*>(key_cache.data_ptr<at::Half>()),
-          reinterpret_cast<const uint16_t*>(
-              value_cache.data_ptr<at::Half>()),
-          block_tables.data_ptr<int32_t>(),
-          sequence_lengths.data_ptr<int32_t>(),
-          reinterpret_cast<uint16_t*>(output.data_ptr<at::Half>()),
-          split_k_workspace_pointer, split_k_workspace_elements, sequences,
-          query_heads, kv_heads, head_size, value_head_size, num_blocks,
-          block_size, key_block_stride, value_block_stride,
-          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
-    } else {
-      status = loom_cuda_paged_decode_attention_f16(
-          reinterpret_cast<const uint16_t*>(query.data_ptr<at::Half>()),
-          reinterpret_cast<const uint16_t*>(key_cache.data_ptr<at::Half>()),
-          reinterpret_cast<const uint16_t*>(
-              value_cache.data_ptr<at::Half>()),
-          block_tables.data_ptr<int32_t>(),
-          sequence_lengths.data_ptr<int32_t>(),
-          reinterpret_cast<uint16_t*>(output.data_ptr<at::Half>()), sequences,
-          query_heads, kv_heads, head_size, value_head_size, num_blocks,
-          block_size, key_block_stride, value_block_stride,
-          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
-    }
-  } else if (query.scalar_type() == at::kBFloat16) {
-    if (split_k_workspace_pointer != nullptr) {
-      status = loom_cuda_paged_decode_attention_split_k_bf16(
-          reinterpret_cast<const uint16_t*>(query.data_ptr<at::BFloat16>()),
-          reinterpret_cast<const uint16_t*>(
-              key_cache.data_ptr<at::BFloat16>()),
-          reinterpret_cast<const uint16_t*>(
-              value_cache.data_ptr<at::BFloat16>()),
-          block_tables.data_ptr<int32_t>(),
-          sequence_lengths.data_ptr<int32_t>(),
-          reinterpret_cast<uint16_t*>(output.data_ptr<at::BFloat16>()),
-          split_k_workspace_pointer, split_k_workspace_elements, sequences,
-          query_heads, kv_heads, head_size, value_head_size, num_blocks,
-          block_size, key_block_stride, value_block_stride,
-          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
-    } else {
-      status = loom_cuda_paged_decode_attention_bf16(
-          reinterpret_cast<const uint16_t*>(query.data_ptr<at::BFloat16>()),
-          reinterpret_cast<const uint16_t*>(
-              key_cache.data_ptr<at::BFloat16>()),
-          reinterpret_cast<const uint16_t*>(
-              value_cache.data_ptr<at::BFloat16>()),
-          block_tables.data_ptr<int32_t>(),
-          sequence_lengths.data_ptr<int32_t>(),
-          reinterpret_cast<uint16_t*>(output.data_ptr<at::BFloat16>()),
-          sequences, query_heads, kv_heads, head_size, value_head_size,
-          num_blocks, block_size, key_block_stride, value_block_stride,
-          max_blocks_per_sequence, max_context, scale_f32, stream.stream());
-    }
-  }
-  TORCH_CHECK(status == LOOM_CUDA_SUCCESS,
-              "Loom CUDA paged decode attention launch failed: ",
-              loom_cuda_status_string(status), " (status ", status, ")");
-  paged_decode_attention_launches.fetch_add(1,
-                                             std::memory_order_relaxed);
+  status = loom_cuda_bridge_paged_decode_attention(
+      bridge_dtype(query), query.data_ptr(),
+      static_cast<uint64_t>(query.numel()), key_cache.data_ptr(),
+      storage_span_elements(key_cache), value_cache.data_ptr(),
+      storage_span_elements(value_cache), block_tables.data_ptr<int32_t>(),
+      static_cast<uint64_t>(block_tables.numel()),
+      sequence_lengths.data_ptr<int32_t>(),
+      static_cast<uint64_t>(sequence_lengths.numel()), output.data_ptr(),
+      static_cast<uint64_t>(output.numel()), split_k_workspace_pointer,
+      split_k_workspace_elements, sequences, query_heads, kv_heads, head_size,
+      value_head_size, num_blocks, block_size, key_block_stride,
+      value_block_stride, max_blocks_per_sequence, max_context, scale_f32,
+      stream.stream());
+  check_bridge_status(status, "paged decode attention");
 }
 
 void paged_decode_attention(
@@ -1122,168 +920,89 @@ void paged_decode_attention(
                                 max_sequence_length, scale);
 }
 
-int64_t paged_decode_attention_launch_count() {
-  return paged_decode_attention_launches.load(std::memory_order_relaxed);
+int64_t bridge_abi_version() {
+  return static_cast<int64_t>(loom_cuda_bridge_abi_version());
 }
 
-void reset_paged_decode_attention_launch_count() {
-  paged_decode_attention_launches.store(0, std::memory_order_relaxed);
-}
-
-int64_t add_rms_norm_rust_bridge_launch_count() {
-  const auto count = loom_cuda_bridge_add_rms_norm_launch_count();
+int64_t bridge_launch_count(int64_t operation) {
+  TORCH_CHECK(operation >= 0 &&
+                  operation <= LOOM_CUDA_BRIDGE_PAGED_DECODE_ATTENTION,
+              "Loom bridge operator id is out of range");
+  uint64_t count = 0;
+  const int status = loom_cuda_bridge_launch_count(
+      static_cast<uint32_t>(operation), &count);
+  check_bridge_status(status, "telemetry query");
   TORCH_CHECK(
       count <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
-      "Loom Rust Add+RMSNorm bridge launch count exceeds int64");
+      "Loom bridge launch count exceeds int64");
   return static_cast<int64_t>(count);
 }
 
-void reset_add_rms_norm_rust_bridge_launch_count() {
-  loom_cuda_bridge_reset_add_rms_norm_launch_count();
-}
-
-int64_t rms_norm_dynamic_fp8_rust_bridge_launch_count() {
-  const auto count = loom_cuda_bridge_rms_norm_dynamic_fp8_launch_count();
-  TORCH_CHECK(
-      count <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
-      "Loom Rust RMSNorm+FP8 bridge launch count exceeds int64");
-  return static_cast<int64_t>(count);
-}
-
-void reset_rms_norm_dynamic_fp8_rust_bridge_launch_count() {
-  loom_cuda_bridge_reset_rms_norm_dynamic_fp8_launch_count();
-}
-
-int64_t greedy_sample_logprobs_rust_bridge_launch_count() {
-  const auto count =
-      loom_cuda_bridge_greedy_sample_logprobs_launch_count();
-  TORCH_CHECK(
-      count <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
-      "Loom Rust greedy-sampling bridge launch count exceeds int64");
-  return static_cast<int64_t>(count);
-}
-
-void reset_greedy_sample_logprobs_rust_bridge_launch_count() {
-  loom_cuda_bridge_reset_greedy_sample_logprobs_launch_count();
+void reset_bridge_launch_count(int64_t operation) {
+  TORCH_CHECK(operation >= 0 &&
+                  operation <= LOOM_CUDA_BRIDGE_PAGED_DECODE_ATTENTION,
+              "Loom bridge operator id is out of range");
+  const int status =
+      loom_cuda_bridge_reset_launch_count(static_cast<uint32_t>(operation));
+  check_bridge_status(status, "telemetry reset");
 }
 
 }  // namespace
 
 TORCH_LIBRARY(loom_kernels, library) {
   library.def(
+      "rms_norm(Tensor input_tensor, Tensor weight, Tensor(a!) output, "
+      "float epsilon) -> ()");
+  library.def(
       "add_rms_norm_mut(Tensor(a!) input_tensor, Tensor(b!) residual, "
       "Tensor weight, float epsilon) -> ()");
-  library.def(
-      "add_rms_norm_mut_unchecked(Tensor(a!) input_tensor, Tensor(b!) "
-      "residual, Tensor weight, float epsilon) -> ()");
-  library.def("add_rms_norm_rust_bridge_launch_count() -> int",
-              &add_rms_norm_rust_bridge_launch_count);
-  library.def("reset_add_rms_norm_rust_bridge_launch_count() -> ()",
-              &reset_add_rms_norm_rust_bridge_launch_count);
-  library.def("rms_norm_dynamic_fp8_rust_bridge_launch_count() -> int",
-              &rms_norm_dynamic_fp8_rust_bridge_launch_count);
-  library.def("reset_rms_norm_dynamic_fp8_rust_bridge_launch_count() -> ()",
-              &reset_rms_norm_dynamic_fp8_rust_bridge_launch_count);
   library.def(
       "rms_norm_dynamic_fp8(Tensor input_tensor, Tensor weight, "
       "Tensor(a!) output, Tensor(b!) scales, float epsilon) -> ()");
   library.def(
-      "rms_norm_dynamic_fp8_unchecked(Tensor input_tensor, Tensor weight, "
-      "Tensor(a!) output, Tensor(b!) scales, float epsilon) -> ()");
-  library.def(
       "silu_and_mul(Tensor input_tensor, Tensor(a!) output) -> ()");
-  library.def(
-      "silu_and_mul_unchecked(Tensor input_tensor, Tensor(a!) output) -> ()");
   library.def(
       "silu_and_mul_dynamic_fp8(Tensor input_tensor, Tensor(a!) output, "
       "Tensor(b!) scales, int group_size) -> ()");
   library.def(
-      "silu_and_mul_dynamic_fp8_unchecked(Tensor input_tensor, "
-      "Tensor(a!) output, Tensor(b!) scales, int group_size) -> ()");
-  library.def(
       "silu_and_mul_per_block_fp8(Tensor(a!) out, Tensor input, "
       "Tensor(b!) scales, int group_size, Tensor? scale_ub=None, "
       "bool is_scale_transposed=False) -> ()");
-  library.def("vllm_silu_and_mul_per_block_fp8_launch_count() -> int",
-              &vllm_silu_and_mul_per_block_fp8_launch_count);
-  library.def("reset_vllm_silu_and_mul_per_block_fp8_launch_count() -> ()",
-              &reset_vllm_silu_and_mul_per_block_fp8_launch_count);
-  library.def("rope_paged_kv_write_launch_count() -> int",
-              &rope_paged_kv_write_launch_count);
-  library.def("reset_rope_paged_kv_write_launch_count() -> ()",
-              &reset_rope_paged_kv_write_launch_count);
   library.def(
       "greedy_sample_logprobs(Tensor logits) -> (Tensor token_ids, Tensor "
       "logprobs, Tensor ranks)");
-  library.def("greedy_sample_logprobs_launch_count() -> int",
-              &greedy_sample_logprobs_launch_count);
-  library.def("reset_greedy_sample_logprobs_launch_count() -> ()",
-              &reset_greedy_sample_logprobs_launch_count);
-  library.def("greedy_sample_logprobs_rust_bridge_launch_count() -> int",
-              &greedy_sample_logprobs_rust_bridge_launch_count);
-  library.def(
-      "reset_greedy_sample_logprobs_rust_bridge_launch_count() -> ()",
-      &reset_greedy_sample_logprobs_rust_bridge_launch_count);
   library.def(
       "selected_token_logprobs(Tensor logits, Tensor token_ids) -> (Tensor "
       "logprobs, Tensor ranks)");
-  library.def("selected_token_logprobs_launch_count() -> int",
-              &selected_token_logprobs_launch_count);
-  library.def("reset_selected_token_logprobs_launch_count() -> ()",
-              &reset_selected_token_logprobs_launch_count);
   library.def("min_p_filter_(Tensor(a!) logits, Tensor min_p) -> ()");
-  library.def(
-      "min_p_filter_unchecked_(Tensor(a!) logits, Tensor min_p) -> ()");
-  library.def("min_p_filter_launch_count() -> int",
-              &min_p_filter_launch_count);
-  library.def("reset_min_p_filter_launch_count() -> ()",
-              &reset_min_p_filter_launch_count);
   library.def(
       "paged_decode_attention(Tensor query, Tensor key_cache, Tensor "
       "value_cache, Tensor block_tables, Tensor sequence_lengths, "
       "Tensor(a!) output, int max_sequence_length, float scale) -> ()");
   library.def(
-      "paged_decode_attention_unchecked(Tensor query, Tensor key_cache, "
-      "Tensor value_cache, Tensor block_tables, Tensor sequence_lengths, "
-      "Tensor(a!) output, int max_sequence_length, float scale) -> ()");
-  library.def("paged_decode_attention_launch_count() -> int",
-              &paged_decode_attention_launch_count);
-  library.def("reset_paged_decode_attention_launch_count() -> ()",
-              &reset_paged_decode_attention_launch_count);
-  library.def(
       "rope_paged_kv_write_(Tensor(a!) query, Tensor(b!) key, Tensor value, "
       "Tensor positions, Tensor cos_sin_cache, Tensor(c!) key_cache, "
       "Tensor(d!) value_cache, Tensor slot_mapping, bool is_neox) -> ()");
-  library.def(
-      "rope_paged_kv_write_unchecked_(Tensor(a!) query, Tensor(b!) key, "
-      "Tensor value, Tensor positions, Tensor cos_sin_cache, "
-      "Tensor(c!) key_cache, Tensor(d!) value_cache, Tensor slot_mapping, "
-      "bool is_neox) -> ()");
+  library.def("bridge_abi_version() -> int", &bridge_abi_version);
+  library.def("bridge_launch_count(int operation) -> int",
+              &bridge_launch_count);
+  library.def("reset_bridge_launch_count(int operation) -> ()",
+              &reset_bridge_launch_count);
 }
 
 TORCH_LIBRARY_IMPL(loom_kernels, CUDA, library) {
+  library.impl("rms_norm", &rms_norm);
   library.impl("add_rms_norm_mut", &add_rms_norm_mut);
-  library.impl("add_rms_norm_mut_unchecked", &launch_add_rms_norm);
   library.impl("rms_norm_dynamic_fp8", &rms_norm_dynamic_fp8);
-  library.impl("rms_norm_dynamic_fp8_unchecked",
-               &launch_rms_norm_dynamic_fp8);
   library.impl("silu_and_mul", &silu_and_mul);
-  library.impl("silu_and_mul_unchecked", &launch_silu_and_mul);
   library.impl("silu_and_mul_dynamic_fp8", &silu_and_mul_dynamic_fp8);
-  library.impl("silu_and_mul_dynamic_fp8_unchecked",
-               &launch_silu_and_mul_dynamic_fp8);
   library.impl("silu_and_mul_per_block_fp8",
                &vllm_silu_and_mul_per_block_fp8);
   library.impl("greedy_sample_logprobs", &greedy_sample_logprobs);
   library.impl("selected_token_logprobs", &selected_token_logprobs);
   library.impl("min_p_filter_", &min_p_filter);
-  library.impl("min_p_filter_unchecked_", &launch_min_p_filter);
   library.impl("paged_decode_attention", &paged_decode_attention);
-  library.impl("paged_decode_attention_unchecked",
-               &launch_paged_decode_attention);
   library.impl("rope_paged_kv_write_", &rope_paged_kv_write);
-  library.impl("rope_paged_kv_write_unchecked_",
-               &launch_rope_paged_kv_write);
 }
 
 TORCH_LIBRARY_IMPL(loom_kernels, Meta, library) {

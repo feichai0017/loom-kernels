@@ -14,6 +14,20 @@ def add_rms_norm_(*args: Any, **kwargs: Any) -> Any:
     return implementation(*args, **kwargs)
 
 
+def rms_norm(*args: Any, **kwargs: Any) -> Any:
+    """Lazily execute inference RMSNorm."""
+    from .torch_ops import rms_norm as implementation
+
+    return implementation(*args, **kwargs)
+
+
+def rms_norm_out(*args: Any, **kwargs: Any) -> Any:
+    """Lazily execute RMSNorm into caller-owned output."""
+    from .torch_ops import rms_norm_out as implementation
+
+    return implementation(*args, **kwargs)
+
+
 def rms_norm_dynamic_fp8(*args: Any, **kwargs: Any) -> Any:
     """Lazily execute fused RMSNorm and dynamic per-token FP8 quantization."""
     from .torch_ops import rms_norm_dynamic_fp8 as implementation
@@ -105,8 +119,10 @@ __all__ = [
     "min_p_filter_",
     "paged_decode_attention",
     "paged_decode_attention_out",
+    "rms_norm",
     "rms_norm_dynamic_fp8",
     "rms_norm_dynamic_fp8_out",
+    "rms_norm_out",
     "rope_paged_kv_write_",
     "selected_token_logprobs",
     "silu_and_mul",

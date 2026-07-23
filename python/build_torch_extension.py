@@ -15,18 +15,12 @@ def main() -> None:
     interpreter_bin = str(Path(sys.executable).parent)
     os.environ["PATH"] = interpreter_bin + os.pathsep + os.environ.get("PATH", "")
     repository = Path(__file__).resolve().parents[1]
-    cuda_sources = repository / "crates" / "loom-cuda-sys" / "cuda"
     cuda_home = Path(os.environ.get("CUDA_HOME", "/usr/local/cuda"))
     cuda_include = cuda_home / "include"
     if not cuda_include.is_dir():
         raise FileNotFoundError(f"CUDA headers not found below {cuda_home}")
     build_root = repository / "build"
-    native_library = build_root / "libloom_kernels_cuda.so"
     rust_bridge = build_root / "libloom_cuda_bridge.so"
-    if not native_library.is_file():
-        raise FileNotFoundError(
-            f"{native_library} is missing; run python/build_native.py first"
-        )
     if not rust_bridge.is_file():
         raise FileNotFoundError(
             f"{rust_bridge} is missing; run python/build_native.py first"
@@ -38,14 +32,12 @@ def main() -> None:
         name="loom_kernels_torch_ops",
         sources=[str(repository / "python" / "csrc" / "torch_ops.cpp")],
         extra_include_paths=[
-            str(cuda_sources / "include"),
             str(repository / "crates" / "loom-cuda-bridge" / "include"),
             str(cuda_include),
         ],
         extra_cflags=["-O3", "-std=c++17"],
         extra_ldflags=[
             f"-L{build_root}",
-            "-lloom_kernels_cuda",
             "-lloom_cuda_bridge",
             "-Wl,-rpath,'$$ORIGIN'",
             "-Wl,-rpath,'$$ORIGIN/..'",

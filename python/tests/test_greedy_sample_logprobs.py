@@ -5,11 +5,10 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from loom_kernels.torch_ops import (
-    adapter_backend,
+    Operator,
     greedy_sample_logprobs,
-    greedy_sample_logprobs_custom_op,
-    greedy_sample_logprobs_rust_bridge_launch_count,
-    reset_greedy_sample_logprobs_rust_bridge_launch_count,
+    launch_count,
+    reset_launch_count,
 )
 
 
@@ -31,12 +30,11 @@ def test_greedy_sample_logprobs_matches_pytorch(dtype, shape):
     torch.manual_seed(113)
     logits = torch.randn(shape, device="cuda", dtype=dtype)
     expected = reference(logits)
-    reset_greedy_sample_logprobs_rust_bridge_launch_count()
+    reset_launch_count(Operator.GREEDY_SAMPLE_LOGPROBS)
     actual = greedy_sample_logprobs(logits)
     torch.cuda.synchronize()
 
-    assert adapter_backend() == "cpp-dispatch"
-    assert greedy_sample_logprobs_rust_bridge_launch_count() == 1
+    assert launch_count(Operator.GREEDY_SAMPLE_LOGPROBS) == 1
     assert torch.equal(actual[0], expected[0])
     torch.testing.assert_close(actual[1], expected[1], rtol=2.0e-5, atol=2.0e-5)
     assert torch.equal(actual[2], expected[2])
@@ -67,11 +65,11 @@ def test_greedy_sample_logprobs_accepts_padded_vocabulary_rows():
     assert not logits.is_contiguous()
     assert logits.stride() == (152064, 1)
 
-    reset_greedy_sample_logprobs_rust_bridge_launch_count()
+    reset_launch_count(Operator.GREEDY_SAMPLE_LOGPROBS)
     actual = greedy_sample_logprobs(logits)
     expected = reference(logits)
     torch.cuda.synchronize()
-    assert greedy_sample_logprobs_rust_bridge_launch_count() == 0
+    assert launch_count(Operator.GREEDY_SAMPLE_LOGPROBS) == 1
     assert torch.equal(actual[0], expected[0])
     torch.testing.assert_close(actual[1], expected[1], rtol=2.0e-5, atol=2.0e-5)
     assert torch.equal(actual[2], expected[2])
@@ -93,7 +91,7 @@ def test_greedy_sample_logprobs_uses_current_external_stream():
 def test_greedy_sample_logprobs_dispatcher_contract_and_fake_tensor():
     logits = torch.randn((3, 257), device="cuda")
     torch.library.opcheck(
-        greedy_sample_logprobs_custom_op(),
+        torch.ops.loom_kernels.greedy_sample_logprobs.default,
         (logits,),
         test_utils=("test_schema", "test_faketensor", "test_autograd_registration"),
     )

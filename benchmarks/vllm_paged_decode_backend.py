@@ -14,9 +14,10 @@ from typing import Any, Callable
 import torch
 
 from loom_kernels.torch_ops import (
-    adapter_backend,
-    paged_decode_attention_launch_count,
-    reset_paged_decode_attention_launch_count,
+    Operator,
+    bridge_abi_version,
+    launch_count,
+    reset_launch_count,
 )
 from loom_kernels.vllm import (
     PAGED_DECODE_OVERRIDE_KEY,
@@ -129,10 +130,10 @@ def benchmark_case(
         )
 
     baseline()
-    reset_paged_decode_attention_launch_count()
+    reset_launch_count(Operator.PAGED_DECODE_ATTENTION)
     loom()
     torch.cuda.synchronize()
-    used_loom = paged_decode_attention_launch_count() == 1
+    used_loom = launch_count(Operator.PAGED_DECODE_ATTENTION) == 1
     torch.testing.assert_close(
         loom_output, baseline_output, rtol=2.0e-2, atol=2.0e-2
     )
@@ -179,8 +180,6 @@ def main() -> None:
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
-    if adapter_backend() != "cpp-dispatch":
-        raise RuntimeError("benchmark requires the Loom C++ dispatcher bridge")
     if min(args.warmup, args.iterations, args.samples) <= 0:
         raise ValueError("warmup, iterations, and samples must be positive")
     batches = positive_ints(args.batches, "batches")
@@ -258,7 +257,7 @@ def main() -> None:
             "torch": torch.__version__,
             "torch_cuda": torch.version.cuda,
             "vllm": vllm.__version__,
-            "adapter_backend": adapter_backend(),
+            "bridge_abi_version": bridge_abi_version(),
         },
         "acceptance": {
             "passed": True,

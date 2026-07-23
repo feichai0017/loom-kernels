@@ -1,6 +1,6 @@
 use crate::rms_norm::CudaBackend;
 use crate::runtime::{loom_status_result, CudaDeviceRead, CudaDeviceWrite, CudaStreamHandle};
-use crate::CudaExecutorError;
+use crate::{CudaExecutorError, RowStridedLayout};
 use half::{bf16, f16};
 use loom_kernels::{DType, GreedySampleLogprobsSpec, SelectedTokenLogprobsSpec};
 
@@ -13,9 +13,11 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         logprobs: &mut impl CudaDeviceWrite<f32>,
         ranks: &mut impl CudaDeviceWrite<i64>,
         spec: GreedySampleLogprobsSpec,
+        layout: RowStridedLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::F32)?;
-        let (rows, vocab_size) = validate_buffers(logits, token_ids, logprobs, ranks, spec)?;
+        let (rows, vocab_size, row_stride) =
+            validate_buffers(logits, token_ids, logprobs, ranks, spec, layout)?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_greedy_sample_logprobs_f32(
                 logits.as_ptr(),
@@ -24,7 +26,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
                 ranks.as_mut_ptr(),
                 rows,
                 vocab_size,
-                u64::from(vocab_size),
+                row_stride,
                 self.raw_stream(),
             )
         })
@@ -38,9 +40,11 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         logprobs: &mut impl CudaDeviceWrite<f32>,
         ranks: &mut impl CudaDeviceWrite<i64>,
         spec: GreedySampleLogprobsSpec,
+        layout: RowStridedLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::F16)?;
-        let (rows, vocab_size) = validate_buffers(logits, token_ids, logprobs, ranks, spec)?;
+        let (rows, vocab_size, row_stride) =
+            validate_buffers(logits, token_ids, logprobs, ranks, spec, layout)?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_greedy_sample_logprobs_f16(
                 logits.as_ptr().cast::<u16>(),
@@ -49,7 +53,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
                 ranks.as_mut_ptr(),
                 rows,
                 vocab_size,
-                u64::from(vocab_size),
+                row_stride,
                 self.raw_stream(),
             )
         })
@@ -63,9 +67,11 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         logprobs: &mut impl CudaDeviceWrite<f32>,
         ranks: &mut impl CudaDeviceWrite<i64>,
         spec: GreedySampleLogprobsSpec,
+        layout: RowStridedLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::Bf16)?;
-        let (rows, vocab_size) = validate_buffers(logits, token_ids, logprobs, ranks, spec)?;
+        let (rows, vocab_size, row_stride) =
+            validate_buffers(logits, token_ids, logprobs, ranks, spec, layout)?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_greedy_sample_logprobs_bf16(
                 logits.as_ptr().cast::<u16>(),
@@ -74,7 +80,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
                 ranks.as_mut_ptr(),
                 rows,
                 vocab_size,
-                u64::from(vocab_size),
+                row_stride,
                 self.raw_stream(),
             )
         })
@@ -88,10 +94,11 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         logprobs: &mut impl CudaDeviceWrite<f32>,
         ranks: &mut impl CudaDeviceWrite<i64>,
         spec: SelectedTokenLogprobsSpec,
+        layout: RowStridedLayout,
     ) -> Result<(), CudaExecutorError> {
         require_selected_dtype(spec, DType::F32)?;
-        let (rows, vocab_size) =
-            validate_selected_buffers(logits, token_ids, logprobs, ranks, spec)?;
+        let (rows, vocab_size, row_stride) =
+            validate_selected_buffers(logits, token_ids, logprobs, ranks, spec, layout)?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_selected_token_logprobs_f32(
                 logits.as_ptr(),
@@ -100,7 +107,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
                 ranks.as_mut_ptr(),
                 rows,
                 vocab_size,
-                u64::from(vocab_size),
+                row_stride,
                 self.raw_stream(),
             )
         })
@@ -114,10 +121,11 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         logprobs: &mut impl CudaDeviceWrite<f32>,
         ranks: &mut impl CudaDeviceWrite<i64>,
         spec: SelectedTokenLogprobsSpec,
+        layout: RowStridedLayout,
     ) -> Result<(), CudaExecutorError> {
         require_selected_dtype(spec, DType::F16)?;
-        let (rows, vocab_size) =
-            validate_selected_buffers(logits, token_ids, logprobs, ranks, spec)?;
+        let (rows, vocab_size, row_stride) =
+            validate_selected_buffers(logits, token_ids, logprobs, ranks, spec, layout)?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_selected_token_logprobs_f16(
                 logits.as_ptr().cast::<u16>(),
@@ -126,7 +134,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
                 ranks.as_mut_ptr(),
                 rows,
                 vocab_size,
-                u64::from(vocab_size),
+                row_stride,
                 self.raw_stream(),
             )
         })
@@ -140,10 +148,11 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         logprobs: &mut impl CudaDeviceWrite<f32>,
         ranks: &mut impl CudaDeviceWrite<i64>,
         spec: SelectedTokenLogprobsSpec,
+        layout: RowStridedLayout,
     ) -> Result<(), CudaExecutorError> {
         require_selected_dtype(spec, DType::Bf16)?;
-        let (rows, vocab_size) =
-            validate_selected_buffers(logits, token_ids, logprobs, ranks, spec)?;
+        let (rows, vocab_size, row_stride) =
+            validate_selected_buffers(logits, token_ids, logprobs, ranks, spec, layout)?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_selected_token_logprobs_bf16(
                 logits.as_ptr().cast::<u16>(),
@@ -152,7 +161,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
                 ranks.as_mut_ptr(),
                 rows,
                 vocab_size,
-                u64::from(vocab_size),
+                row_stride,
                 self.raw_stream(),
             )
         })
@@ -176,8 +185,12 @@ fn validate_buffers<T: Copy>(
     logprobs: &impl CudaDeviceRead<f32>,
     ranks: &impl CudaDeviceRead<i64>,
     spec: GreedySampleLogprobsSpec,
-) -> Result<(u32, u32), CudaExecutorError> {
-    logits.require_len(spec.logits_numel(), "greedy-sampling logits")?;
+    layout: RowStridedLayout,
+) -> Result<(u32, u32, u64), CudaExecutorError> {
+    logits.require_len(
+        layout.storage_elements(spec.rows(), spec.vocab_size())?,
+        "greedy-sampling logits",
+    )?;
     token_ids.require_len(spec.rows(), "greedy-sampling token IDs")?;
     logprobs.require_len(spec.rows(), "greedy-sampling logprobs")?;
     ranks.require_len(spec.rows(), "greedy-sampling ranks")?;
@@ -192,7 +205,10 @@ fn validate_buffers<T: Copy>(
             "greedy-sampling vocabulary exceeds int32 token IDs".into(),
         ));
     }
-    Ok((rows, vocab_size))
+    let row_stride = u64::try_from(layout.row_stride()).map_err(|_| {
+        CudaExecutorError::InvalidContract("greedy-sampling row stride exceeds the CUDA ABI".into())
+    })?;
+    Ok((rows, vocab_size, row_stride))
 }
 
 fn require_selected_dtype(
@@ -215,8 +231,12 @@ fn validate_selected_buffers<T: Copy>(
     logprobs: &impl CudaDeviceRead<f32>,
     ranks: &impl CudaDeviceRead<i64>,
     spec: SelectedTokenLogprobsSpec,
-) -> Result<(u32, u32), CudaExecutorError> {
-    logits.require_len(spec.logits_numel(), "selected-token logits")?;
+    layout: RowStridedLayout,
+) -> Result<(u32, u32, u64), CudaExecutorError> {
+    logits.require_len(
+        layout.storage_elements(spec.rows(), spec.vocab_size())?,
+        "selected-token logits",
+    )?;
     token_ids.require_len(spec.rows(), "selected token IDs")?;
     logprobs.require_len(spec.rows(), "selected-token logprobs")?;
     ranks.require_len(spec.rows(), "selected-token ranks")?;
@@ -226,7 +246,10 @@ fn validate_selected_buffers<T: Copy>(
     let vocab_size = u32::try_from(spec.vocab_size()).map_err(|_| {
         CudaExecutorError::InvalidContract("selected-token vocabulary exceeds the CUDA ABI".into())
     })?;
-    Ok((rows, vocab_size))
+    let row_stride = u64::try_from(layout.row_stride()).map_err(|_| {
+        CudaExecutorError::InvalidContract("selected-token row stride exceeds the CUDA ABI".into())
+    })?;
+    Ok((rows, vocab_size, row_stride))
 }
 
 #[cfg(test)]
@@ -263,6 +286,7 @@ mod tests {
                 &mut logprobs_device,
                 &mut ranks_device,
                 spec,
+                RowStridedLayout::contiguous(spec.vocab_size()),
             )
             .unwrap();
         backend.stream().synchronize().unwrap();
@@ -308,6 +332,7 @@ mod tests {
                 &mut logprobs_device,
                 &mut ranks_device,
                 spec,
+                RowStridedLayout::contiguous(spec.vocab_size()),
             )
             .unwrap();
         backend.stream().synchronize().unwrap();

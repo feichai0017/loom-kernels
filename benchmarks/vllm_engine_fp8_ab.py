@@ -258,9 +258,9 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     from vllm import LLM, SamplingParams
 
     from loom_kernels.torch_ops import (
-        adapter_backend,
-        reset_vllm_silu_and_mul_per_block_fp8_launch_count,
-        vllm_silu_and_mul_per_block_fp8_launch_count,
+        Operator,
+        launch_count,
+        reset_launch_count,
     )
     from loom_kernels.vllm import (
         provider_metadata,
@@ -271,9 +271,6 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     from vllm.model_executor.layers.quantization.utils.quant_utils import (
         kFp8Dynamic128Sym,
     )
-
-    if adapter_backend() != "cpp-dispatch":
-        raise RuntimeError("real-model evidence requires the C++ dispatcher bridge")
 
     loom_operator = torch.ops.loom_kernels.silu_and_mul_per_block_fp8.default
     fusion_table_uses_loom_before_registration = (
@@ -290,7 +287,7 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     fusion_table_uses_loom_before_engine = (
         FUSED_OPS[kFp8Dynamic128Sym] == loom_operator
     )
-    reset_vllm_silu_and_mul_per_block_fp8_launch_count()
+    reset_launch_count(Operator.SILU_AND_MUL_DYNAMIC_FP8)
 
     model_path = Path(args.model).expanduser()
     model_is_local = model_path.exists()
@@ -316,12 +313,14 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     if args.model_revision and not model_is_local:
         engine_arguments["revision"] = args.model_revision
     engine = LLM(**engine_arguments)
-    launches_after_engine_init = vllm_silu_and_mul_per_block_fp8_launch_count()
+    launches_after_engine_init = launch_count(
+        Operator.SILU_AND_MUL_DYNAMIC_FP8
+    )
     fusion_matches_after_engine = get_match_table()
 
     fusion_table_uses_loom = FUSED_OPS[kFp8Dynamic128Sym] == loom_operator
     cases = [run_case(engine, SamplingParams, case, args) for case in args.cases]
-    launch_count = vllm_silu_and_mul_per_block_fp8_launch_count()
+    host_launch_count = launch_count(Operator.SILU_AND_MUL_DYNAMIC_FP8)
     fusion_matches_after_cases = get_match_table()
     report = {
         "provider": provider,
@@ -346,7 +345,7 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "fusion_table_uses_loom": fusion_table_uses_loom,
             "launches_after_engine_init": launches_after_engine_init,
-            "host_launch_count": launch_count,
+            "host_launch_count": host_launch_count,
             "fusion_matches_after_engine": fusion_matches_after_engine,
             "fusion_matches_after_cases": fusion_matches_after_cases,
             "counter_semantics": (

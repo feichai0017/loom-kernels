@@ -5,17 +5,30 @@ spelling; Python source-adapter metadata uses the equivalent PEP 440 spelling.
 
 ## Unreleased
 
+### Breaking
+
+- replaced the mixed Python/ctypes, direct C++ CUDA, and partial Rust-bridge
+  framework stack with one required
+  `PyTorch -> C++ dispatcher -> Rust bridge -> safe Rust -> CUDA` path;
+- removed `_native.py`, every `*_unchecked` dispatcher operator,
+  `LOOM_KERNELS_CUDA_LIBRARY`, `libloom_kernels_cuda.so`, `adapter_backend()`,
+  and the per-operator telemetry functions;
+- replaced telemetry with `Operator`, `launch_count(operator)`, and
+  `reset_launch_count(operator)`;
+- changed Rust CUDA entrypoints for row-strided logits, paged decode, RoPE/KV,
+  and activation FP8 to require explicit physical-layout objects;
+- changed `PagedDecodeAttentionSpec::new` to accept
+  `max_sequence_length` independently from block-table capacity.
+
 ### Added
 
-- `loom-cuda-bridge`, a panic-contained checked C boundary that converts
-  framework-owned pointers, element counts, and CUDA streams into borrowed safe
-  Rust resources;
-- Add+RMSNorm PyTorch/vLLM and RMSNorm+dynamic-FP8 PyTorch vertical slices
-  through that bridge, with independent launch telemetry, external-stream,
-  `torch.compile`, CUDA Graph, and invalid-buffer gates on NVIDIA H20.
-- contiguous greedy selection plus sampled-token logprob/rank through the
-  checked Rust bridge, while preserving the raw stride-aware ABI for padded
-  vocabulary rows;
+- complete bridge coverage for RMSNorm, Add+RMSNorm, RMSNorm+FP8,
+  SiLU-and-Mul, SiLU-and-Mul+FP8, RoPE+paged-KV, greedy/selected logprobs,
+  Min-P, and base/split-K paged decode;
+- explicit Rust physical-layout contracts for padded logits, packed QKV,
+  NHD/HND caches, interleaved cache storage, scale layout, and FP8 scale upper
+  bounds;
+- standalone PyTorch `rms_norm` and `rms_norm_out` APIs;
 - vLLM 0.25 support, an explicit compatibility matrix, H20 0.24/0.25 GPU-suite
   evidence, contribution guidance, and structured issue forms.
 

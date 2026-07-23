@@ -10,6 +10,10 @@ use thiserror::Error;
 #[cfg(feature = "cuda")]
 mod greedy_sample;
 #[cfg(feature = "cuda")]
+mod layout;
+#[cfg(feature = "cuda")]
+pub use layout::{PagedDecodeLayout, RopePagedKvLayout, RowStridedLayout};
+#[cfg(feature = "cuda")]
 mod min_p;
 #[cfg(feature = "cuda")]
 mod paged_decode;
@@ -25,6 +29,8 @@ pub mod runtime;
 mod silu_and_mul;
 #[cfg(feature = "cuda")]
 pub use rms_norm::CudaBackend;
+#[cfg(feature = "cuda")]
+pub use silu_and_mul::{Fp8ScaleLayout, SiluAndMulDynamicFp8Options};
 
 /// Validation, availability, or CUDA launch failure.
 #[derive(Debug, Error, Clone, PartialEq, Eq)]

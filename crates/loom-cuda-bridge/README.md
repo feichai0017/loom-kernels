@@ -8,11 +8,17 @@ counts, and the stream handle once; Rust constructs non-owning typed views,
 validates the operator contract, and launches asynchronously without copying,
 allocating device memory, synchronizing, or taking ownership.
 
-The admitted bridge paths are fused Add+RMSNorm, RMSNorm followed by dynamic
-per-token FP8 quantization, and contiguous greedy selection plus sampled-token
-logprob/rank. Greedy logits with padded row strides preserve the existing raw
-C ABI fallback. Other operators remain in `loom-cuda-sys` until their framework
-paths are migrated and validated independently.
+The bridge exposes one dtype-generic entrypoint for each semantic operator:
+RMSNorm, Add+RMSNorm, RMSNorm+dynamic FP8, SiLU-and-Mul,
+SiLU-and-Mul+dynamic FP8, greedy sampled logprobs, selected-token logprobs,
+Min-P filtering, RoPE+paged-KV write, and paged decode attention. Explicit
+layout descriptors cover padded logits, strided Q/K/V tensors, native paged
+caches, and base or split-K decode. The split-K decision remains inside safe
+Rust dispatch.
+
+Framework code has no alternate CUDA route. The PyTorch shim calls only this
+ABI; the bridge calls safe `loom-cuda`; and only `loom-cuda` reaches the
+internal launch ABI in `loom-cuda-sys`.
 
 ```bash
 CUDA_HOME=/usr/local/cuda LOOM_CUDA_ARCHS=90 \

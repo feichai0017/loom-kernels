@@ -60,24 +60,25 @@ is never a performance claim.
 flowchart LR
     A["Inference engine"] --> N["Native Rust adapter"]
     A --> P["PyTorch / vLLM adapter"]
-    P -- "Norm / contiguous greedy tail" --> B["Checked Rust FFI bridge"]
-    P -- "Other admitted operators" --> C["Raw CUDA C ABI"]
+    P --> T["Thin C++ dispatcher"]
+    T --> B["Versioned Rust bridge"]
     N --> R["Safe Rust dispatch"]
     B --> R
-    R --> C
+    R --> C["Internal CUDA launch ABI"]
     C --> D["Handwritten CUDA"]
     F["Rust contracts + CPU oracles"] -. validates .-> N
     F -. gates .-> B
-    F -. validates .-> P
+    F -. defines .-> P
 ```
 
-The backend either accepts the exact contract or declines it. Adapters do not
-silently copy, cast, reshape, or change sampling policy to force a Loom path.
-Add+RMSNorm, RMSNorm→dynamic-FP8, and contiguous greedy+sampled-logprob calls
-are routed through `loom-cuda-bridge`: PyTorch passes its existing pointers,
-element counts, and current stream into checked Rust borrowed views before
-launch. Padded greedy rows retain the stride-aware raw ABI, and other operators
-will migrate only after their own correctness and engine gates close.
+Every framework operator follows this path. There is no Python/ctypes
+implementation, unchecked dispatcher twin, direct C++-to-CUDA launch, or
+layout-specific fallback inside Loom. PyTorch passes existing pointers,
+physical storage spans, strides, and its current stream through the versioned
+bridge; Rust constructs checked borrowed views and selects the CUDA kernel.
+The backend either accepts the exact contract or returns an error. Engine
+adapters decide whether to call Loom before dispatch and retain the engine's
+native implementation for unsupported semantics.
 
 ## Quick start
 
@@ -133,8 +134,9 @@ CUDA_HOME=/usr/local/cuda-13.1 \
   .venv-vllm/bin/python python/build_torch_extension.py
 ```
 
-The first build produces both the raw CUDA library and
-`libloom_cuda_bridge.so`; the second links the PyTorch dispatcher against both.
+The first build produces `libloom_cuda_bridge.so`, including the Rust-owned
+CUDA backend. The second links the thin PyTorch dispatcher only against that
+bridge.
 
 See the [Python adapter README](python/README.md) for direct calls and the
 [vLLM integration guide](docs/guides/vllm-ir-provider.md) for every opt-in and
@@ -169,7 +171,7 @@ opens the raw JSON artifact used for the claim.
 | `crates/loom-kernels` | Public Rust contracts, capabilities, and CPU references |
 | `crates/loom-cuda` | Safe CUDA backend and oracle-backed benchmarks |
 | `crates/loom-cuda-bridge` | Checked C boundary from framework-owned tensors into borrowed Rust dispatch |
-| `crates/loom-cuda-sys` | Raw CUDA ABI, build plumbing, and packaged handwritten kernels |
+| `crates/loom-cuda-sys` | Internal CUDA launch ABI, build plumbing, and packaged handwritten kernels |
 | `python` | PyTorch dispatcher bridge and vLLM adapters |
 | `benchmarks` | Named framework and engine baselines |
 | `docs/results` | Hardware-qualified machine-readable evidence |

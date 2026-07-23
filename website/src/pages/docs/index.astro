@@ -91,7 +91,8 @@ cargo check --workspace --release</code></pre>
         <tbody>
           <tr><td>loom-kernels</td><td>Public contracts, capabilities, and deterministic CPU references.</td></tr>
           <tr><td>loom-cuda</td><td>Safe stream/buffer ownership, checked dispatch, and benchmarks.</td></tr>
-          <tr><td>loom-cuda-sys</td><td>Dependency-light raw CUDA ABI and compilation plumbing.</td></tr>
+          <tr><td>loom-cuda-sys</td><td>Internal CUDA launch ABI, compilation plumbing, and handwritten kernels.</td></tr>
+          <tr><td>loom-cuda-bridge</td><td>The only framework boundary into safe borrowed Rust dispatch.</td></tr>
           <tr><td>python</td><td>Current-stream PyTorch operators and narrow vLLM integration.</td></tr>
         </tbody>
       </table>

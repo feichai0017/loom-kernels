@@ -254,11 +254,9 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     from vllm import LLM, SamplingParams
 
     from loom_kernels.torch_ops import (
-        adapter_backend,
-        greedy_sample_logprobs_launch_count,
-        reset_greedy_sample_logprobs_launch_count,
-        reset_selected_token_logprobs_launch_count,
-        selected_token_logprobs_launch_count,
+        Operator,
+        launch_count,
+        reset_launch_count,
     )
     from loom_kernels.vllm import (
         provider_metadata,
@@ -266,8 +264,6 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         register_vllm_selected_token_logprobs,
     )
 
-    if adapter_backend() != "cpp-dispatch":
-        raise RuntimeError("engine evidence requires the C++ dispatcher bridge")
     explicit_registration = None
     if provider == "loom":
         registration = (
@@ -279,11 +275,11 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         if explicit_registration is None:
             raise RuntimeError("Loom sampled-token logprob registration failed")
     if args.sampling_mode == "greedy":
-        reset_greedy_sample_logprobs_launch_count()
-        launch_count_fn = greedy_sample_logprobs_launch_count
+        operator = Operator.GREEDY_SAMPLE_LOGPROBS
     else:
-        reset_selected_token_logprobs_launch_count()
-        launch_count_fn = selected_token_logprobs_launch_count
+        operator = Operator.SELECTED_TOKEN_LOGPROBS
+    reset_launch_count(operator)
+    launch_count_fn = lambda: launch_count(operator)
 
     model_path = Path(args.model).expanduser()
     model = str(model_path.resolve()) if model_path.exists() else args.model
@@ -314,7 +310,7 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         )
         for case in args.cases
     ]
-    launch_count = launch_count_fn()
+    host_launch_count = launch_count_fn()
     report = {
         "provider": provider,
         "model": model,
@@ -336,7 +332,7 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         "loom_path": {
             "explicit_registration": explicit_registration,
             "launches_after_engine_init": launches_after_engine_init,
-            "host_launch_count": launch_count,
+            "host_launch_count": host_launch_count,
             "provider_metadata": provider_metadata(),
             "counter_semantics": (
                 "host submissions through the sampler fast path; this sampler "
@@ -354,7 +350,7 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     args.internal_result.parent.mkdir(parents=True, exist_ok=True)
     args.internal_result.write_text(json.dumps(report, indent=2) + "\n")
     print(
-        f"provider={provider} host_launch_count={launch_count}",
+        f"provider={provider} host_launch_count={host_launch_count}",
         file=sys.stderr,
     )
     return report

@@ -14,8 +14,8 @@ import { repositoryUrl } from "../../data/site";
     <h1>Adapters translate. Engines decide.</h1>
     <p>
       Loom preserves engine-owned tensors, mutation schemas, layouts, and the
-      current CUDA stream. A route either accepts the exact contract or returns
-      to the native implementation.
+      current CUDA stream. Eligibility is decided before dispatch; every
+      admitted operator then follows the same Rust-owned execution path.
     </p>
   </header>
 
@@ -40,9 +40,9 @@ import { repositoryUrl } from "../../data/site";
           <p>Enable only the routes whose exact shapes and semantics passed H20 gates.</p>
         </div>
         <div class="doc-card">
-          <span class="card-index">04 / Fallback</span>
-          <h3>Native by default</h3>
-          <p>Unsupported dtypes, layouts, shapes, or policies execute the original engine path.</p>
+          <span class="card-index">04 / Admission</span>
+          <h3>Exact contracts only</h3>
+          <p>Unsupported dtypes, layouts, shapes, or policies never enter Loom.</p>
         </div>
       </div>
 
@@ -56,9 +56,11 @@ CUDA_HOME=/usr/local/cuda-13.1 LOOM_CUDA_ARCHS=90 \
 CUDA_HOME=/usr/local/cuda-13.1 \
   .venv-vllm/bin/python python/build_torch_extension.py</code></pre>
       <p>
-        The first command builds the raw CUDA library and checked Rust bridge.
-        The second creates the small LibTorch dispatcher shim. Repository
-        checkouts discover all three libraries under <code>build/</code>.
+        The first command builds the Rust-owned
+        <code>libloom_cuda_bridge.so</code>, including its internal CUDA
+        backend. The second creates the thin LibTorch dispatcher shim, linked
+        only against that bridge. Repository checkouts discover both libraries
+        under <code>build/</code>.
       </p>
 
       <h2>Call PyTorch directly</h2>
@@ -96,11 +98,11 @@ min_p_filter_(sampling_logits_f32, min_p_f32)</code></pre>
       </table>
 
       <div class="doc-note">
-        <strong>Fallback is part of the API.</strong>
+        <strong>Admission happens before Loom dispatch.</strong>
         <p>
           Loom does not copy, cast, reshape, or alter sampling policy to force
-          eligibility. The adapter declines unsupported contracts and preserves
-          the original vLLM path.
+          eligibility. The adapter calls Loom only for an exact contract;
+          otherwise vLLM keeps ownership of the operation.
         </p>
       </div>
 

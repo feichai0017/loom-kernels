@@ -268,7 +268,7 @@ impl<T> Drop for DeviceBuffer<T> {
     }
 }
 
-/// A read-only borrowed view over contiguous CUDA device memory.
+/// A read-only borrowed view over addressable CUDA device storage.
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceSlice<'memory, T: Copy> {
     pointer: NonNull<T>,
@@ -281,10 +281,12 @@ impl<'memory, T: Copy> DeviceSlice<'memory, T> {
     ///
     /// # Safety
     ///
-    /// `pointer` must be aligned for `T` and identify at least `len`
-    /// contiguous `T` values in device memory for `'memory`.
+    /// `pointer` must be aligned for `T` and identify an addressable span of at
+    /// least `len` contiguous `T` values in device memory for `'memory`.
     /// The allocation must belong to the CUDA context used for execution, and
-    /// no mutable access may race with Loom's asynchronous reads.
+    /// no mutable access may race with the logical elements selected by the
+    /// validated operator layout. Disjoint strided views may share one
+    /// allocation even when their addressable bounding spans overlap.
     pub unsafe fn from_raw_parts(pointer: *const T, len: usize) -> Result<Self, CudaExecutorError> {
         Ok(Self {
             pointer: checked_device_pointer(pointer, len, "borrowed device slice")?,
@@ -318,7 +320,7 @@ impl<T: Copy> CudaDeviceRead<T> for DeviceSlice<'_, T> {
     }
 }
 
-/// An exclusive borrowed view over contiguous CUDA device memory.
+/// A writable borrowed view over addressable CUDA device storage.
 #[derive(Debug)]
 pub struct DeviceSliceMut<'memory, T: Copy> {
     pointer: NonNull<T>,
@@ -331,10 +333,13 @@ impl<'memory, T: Copy> DeviceSliceMut<'memory, T> {
     ///
     /// # Safety
     ///
-    /// `pointer` must be aligned for `T` and identify at least `len` writable,
-    /// contiguous `T` elements in device memory for `'memory`.
-    /// The caller must hold exclusive access to that region until all
-    /// asynchronous Loom work using the view is ordered complete.
+    /// `pointer` must be aligned for `T` and identify an addressable span of at
+    /// least `len` writable, contiguous `T` elements in device memory for
+    /// `'memory`. The caller must hold exclusive access to every logical
+    /// element selected by the validated operator layout until all
+    /// asynchronous Loom work using the view is ordered complete. Disjoint
+    /// strided views may share one allocation even when their addressable
+    /// bounding spans overlap.
     pub unsafe fn from_raw_parts(pointer: *mut T, len: usize) -> Result<Self, CudaExecutorError> {
         Ok(Self {
             pointer: checked_device_pointer(pointer.cast_const(), len, "mutable device slice")?,

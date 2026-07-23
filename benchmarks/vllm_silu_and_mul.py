@@ -128,13 +128,10 @@ def main() -> None:
     import torch
     import vllm
 
-    from loom_kernels.torch_ops import adapter_backend
+    from loom_kernels.torch_ops import bridge_abi_version
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
-    if adapter_backend() != "cpp-dispatch":
-        raise RuntimeError("the fair dispatcher benchmark requires the C++ shim")
-
     dtype = {
         "f32": torch.float32,
         "f16": torch.float16,
@@ -157,7 +154,7 @@ def main() -> None:
     for provider in provider_names:
         output = torch.empty_like(expected)
         if provider == "loom_cuda":
-            operation = lambda: torch.ops.loom_kernels.silu_and_mul_unchecked(
+            operation = lambda: torch.ops.loom_kernels.silu_and_mul(
                 input_tensor, output
             )
         else:
@@ -193,7 +190,7 @@ def main() -> None:
             "torch": torch.__version__,
             "torch_cuda": torch.version.cuda,
             "vllm": vllm.__version__,
-            "adapter_backend": adapter_backend(),
+            "bridge_abi_version": bridge_abi_version(),
         },
     }
     print(json.dumps(report, indent=2))

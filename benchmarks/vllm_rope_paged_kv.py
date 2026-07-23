@@ -13,7 +13,7 @@ from typing import Callable
 
 import torch
 
-from loom_kernels.torch_ops import adapter_backend, rope_paged_kv_write_
+from loom_kernels.torch_ops import bridge_abi_version, rope_paged_kv_write_
 
 
 DTYPES = {
@@ -282,7 +282,7 @@ def main() -> None:
         "compute_capability": list(torch.cuda.get_device_capability()),
         "torch_version": torch.__version__,
         "vllm_version": vllm.__version__,
-        "adapter_backend": adapter_backend(),
+        "bridge_abi_version": bridge_abi_version(),
         "baseline": "vLLM _C.rotary_embedding + _C_cache_ops.reshape_and_cache_flash",
         "candidate": "Loom rope_paged_kv_write_",
         "dtype": args.dtype,

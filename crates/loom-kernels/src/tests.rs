@@ -599,7 +599,7 @@ fn fused_rope_paged_write_rejects_bad_metadata_before_mutation() {
 
 #[test]
 fn paged_decode_attention_follows_block_indirection_and_gqa_mapping() {
-    let spec = PagedDecodeAttentionSpec::new(1, 2, 1, 1, 1, 2, 2, 2, 1.0, DType::F32).unwrap();
+    let spec = PagedDecodeAttentionSpec::new(1, 2, 1, 1, 1, 2, 2, 2, 4, 1.0, DType::F32).unwrap();
     let query = [1.0_f32, 1.0];
     // Physical block 0 is the second logical block. Its second slot is
     // outside the active sequence and must not affect the result.
@@ -627,7 +627,7 @@ fn paged_decode_attention_follows_block_indirection_and_gqa_mapping() {
 
 #[test]
 fn paged_decode_attention_supports_low_precision_and_distinct_value_width() {
-    let spec = PagedDecodeAttentionSpec::new(1, 1, 1, 2, 3, 1, 1, 1, 0.5, DType::Bf16).unwrap();
+    let spec = PagedDecodeAttentionSpec::new(1, 1, 1, 2, 3, 1, 1, 1, 1, 0.5, DType::Bf16).unwrap();
     let query = [bf16::from_f32(2.0), bf16::from_f32(-1.0)];
     let key_cache = [bf16::from_f32(4.0), bf16::from_f32(3.0)];
     let value_cache = [
@@ -654,18 +654,18 @@ fn paged_decode_attention_supports_low_precision_and_distinct_value_width() {
 #[test]
 fn paged_decode_attention_validates_metadata_before_mutating_output() {
     assert_eq!(
-        PagedDecodeAttentionSpec::new(1, 3, 2, 4, 4, 1, 16, 1, 0.5, DType::F16),
+        PagedDecodeAttentionSpec::new(1, 3, 2, 4, 4, 1, 16, 1, 16, 0.5, DType::F16),
         Err(ContractError::HeadCountNotDivisible {
             query_heads: 3,
             kv_heads: 2,
         })
     );
     assert_eq!(
-        PagedDecodeAttentionSpec::new(1, 2, 1, 4, 4, 1, 16, 1, 0.0, DType::F16),
+        PagedDecodeAttentionSpec::new(1, 2, 1, 4, 4, 1, 16, 1, 16, 0.0, DType::F16),
         Err(ContractError::InvalidScale(0.0))
     );
 
-    let spec = PagedDecodeAttentionSpec::new(2, 1, 1, 1, 1, 2, 2, 2, 1.0, DType::F32).unwrap();
+    let spec = PagedDecodeAttentionSpec::new(2, 1, 1, 1, 1, 2, 2, 2, 4, 1.0, DType::F32).unwrap();
     let query = [1.0_f32; 2];
     let key_cache = [1.0_f32; 4];
     let value_cache = [2.0_f32; 4];

@@ -176,14 +176,11 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     from vllm.config import CompilationConfig
 
     from loom_kernels.torch_ops import (
-        adapter_backend,
-        reset_rope_paged_kv_write_launch_count,
-        rope_paged_kv_write_launch_count,
+        Operator,
+        launch_count,
+        reset_launch_count,
     )
     from loom_kernels.vllm import configure_vllm_rope_paged_kv, provider_metadata
-
-    if adapter_backend() != "cpp-dispatch":
-        raise RuntimeError("engine evidence requires the C++ dispatcher bridge")
 
     # Keep graph partitioning and rotary dispatch identical on both sides. The
     # only difference is whether vLLM's official fusion pass is enabled.
@@ -194,7 +191,7 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         compilation_config = configure_vllm_rope_paged_kv(
             compilation_config, max_token_num=args.max_fused_tokens
         )
-    reset_rope_paged_kv_write_launch_count()
+    reset_launch_count(Operator.ROPE_PAGED_KV_WRITE)
 
     model_path = Path(args.model).expanduser()
     model = str(model_path.resolve()) if model_path.exists() else args.model
@@ -210,13 +207,13 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         disable_log_stats=True,
         compilation_config=compilation_config,
     )
-    launches_after_engine_init = rope_paged_kv_write_launch_count()
+    launches_after_engine_init = launch_count(Operator.ROPE_PAGED_KV_WRITE)
     matches_after_engine_init = get_match_table()
     cases = [
         run_case(engine, SamplingParams, case, args.warmup, args.repeats)
         for case in args.cases
     ]
-    launch_count = rope_paged_kv_write_launch_count()
+    host_launch_count = launch_count(Operator.ROPE_PAGED_KV_WRITE)
     report = {
         "provider": provider,
         "model": model,
@@ -227,7 +224,7 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         "cases": cases,
         "loom_path": {
             "launches_after_engine_init": launches_after_engine_init,
-            "host_launch_count": launch_count,
+            "host_launch_count": host_launch_count,
             "fusion_matches_after_engine_init": matches_after_engine_init,
             "provider_metadata": provider_metadata(),
             "counter_semantics": (
@@ -247,7 +244,7 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     args.internal_result.parent.mkdir(parents=True, exist_ok=True)
     args.internal_result.write_text(json.dumps(report, indent=2) + "\n")
     print(
-        f"provider={provider} host_launch_count={launch_count} "
+        f"provider={provider} host_launch_count={host_launch_count} "
         f"matches={matches_after_engine_init}",
         file=sys.stderr,
     )

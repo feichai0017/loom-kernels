@@ -8,7 +8,7 @@ from typing import Any
 
 import torch
 
-from ._native import native_available
+from ._torch_extension import load_torch_extension, torch_extension_available
 
 
 DEFAULT_PROVIDER = "loom_cuda"
@@ -125,7 +125,7 @@ def register_vllm_silu_and_mul() -> str | None:
     global _SILU_OVERRIDE_CLASS
     if _SILU_OVERRIDE_CLASS is not None:
         return SILU_OVERRIDE_KEY
-    if not native_available():
+    if not torch_extension_available():
         return None
     if not supports_installed_vllm():
         return None
@@ -133,7 +133,8 @@ def register_vllm_silu_and_mul() -> str | None:
     from vllm.model_executor.custom_op import CustomOp
     from vllm.model_executor.layers.activation import SiluAndMul
 
-    from .torch_ops import _silu_and_mul_unchecked
+    load_torch_extension()
+    implementation = torch.ops.loom_kernels.silu_and_mul.default
 
     @CustomOp.register_oot(name=SILU_OVERRIDE_KEY)
     class LoomSiluAndMul(SiluAndMul):
@@ -149,7 +150,7 @@ def register_vllm_silu_and_mul() -> str | None:
             output = torch.empty(
                 (*x.shape[:-1], width), dtype=x.dtype, device=x.device
             )
-            _silu_and_mul_unchecked(x, output)
+            implementation(x, output)
             return output
 
     _SILU_OVERRIDE_CLASS = LoomSiluAndMul
@@ -161,14 +162,9 @@ def register_vllm_silu_and_mul_dynamic_fp8() -> str | None:
     global _ACT_QUANT_OVERRIDE_REGISTERED
     if _ACT_QUANT_OVERRIDE_REGISTERED:
         return ACT_QUANT_OVERRIDE_KEY
-    if not native_available():
+    if not torch_extension_available():
         return None
     if not supports_installed_vllm():
-        return None
-
-    from .torch_ops import adapter_backend
-
-    if adapter_backend() != "cpp-dispatch":
         return None
 
     from vllm.compilation.passes.fusion.act_quant_fusion import FUSED_OPS
@@ -177,6 +173,7 @@ def register_vllm_silu_and_mul_dynamic_fp8() -> str | None:
         kFp8Dynamic128Sym,
     )
 
+    load_torch_extension()
     implementation = torch.ops.loom_kernels.silu_and_mul_per_block_fp8.default
     FUSED_OPS[kFp8Dynamic64Sym] = implementation
     FUSED_OPS[kFp8Dynamic128Sym] = implementation
@@ -194,12 +191,7 @@ def register_vllm_rope_paged_kv() -> str | None:
     global _ROPE_PAGED_KV_REGISTERED
     if _ROPE_PAGED_KV_REGISTERED:
         return ROPE_PAGED_KV_OVERRIDE_KEY
-    if not native_available():
-        return None
-
-    from .torch_ops import adapter_backend
-
-    if adapter_backend() != "cpp-dispatch":
+    if not torch_extension_available():
         return None
 
     if not supports_installed_vllm():
@@ -209,7 +201,8 @@ def register_vllm_rope_paged_kv() -> str | None:
     from vllm.v1.attention.backends.flash_attn import FlashAttentionImpl
     from vllm.v1.attention.backends.flashinfer import FlashInferImpl
 
-    implementation = torch.ops.loom_kernels.rope_paged_kv_write_unchecked_.default
+    load_torch_extension()
+    implementation = torch.ops.loom_kernels.rope_paged_kv_write_.default
     native_cache_dtypes = {
         "auto",
         "float16",
@@ -343,16 +336,10 @@ def register_vllm_paged_decode_attention() -> str | None:
     global _PAGED_DECODE_REGISTERED
     if _PAGED_DECODE_REGISTERED:
         return PAGED_DECODE_OVERRIDE_KEY
-    if not native_available():
+    if not torch_extension_available():
         return None
 
-    from .torch_ops import (
-        adapter_backend,
-        supports_paged_decode_attention,
-    )
-
-    if adapter_backend() != "cpp-dispatch":
-        return None
+    from .torch_ops import supports_paged_decode_attention
 
     if not supports_installed_vllm():
         return None
@@ -360,9 +347,7 @@ def register_vllm_paged_decode_attention() -> str | None:
     from vllm.v1.attention.backend import AttentionType
     from vllm.v1.attention.backends.flash_attn import FlashAttentionImpl
 
-    implementation = (
-        torch.ops.loom_kernels.paged_decode_attention_unchecked.default
-    )
+    implementation = torch.ops.loom_kernels.paged_decode_attention.default
     original_forward = FlashAttentionImpl.forward
     native_cache_dtypes = {
         "auto",
@@ -555,12 +540,7 @@ def register_vllm_greedy_sample_logprobs() -> str | None:
     global _GREEDY_SAMPLE_LOGPROBS_REGISTERED
     if _GREEDY_SAMPLE_LOGPROBS_REGISTERED:
         return GREEDY_SAMPLE_LOGPROBS_OVERRIDE_KEY
-    if not native_available():
-        return None
-
-    from .torch_ops import adapter_backend
-
-    if adapter_backend() != "cpp-dispatch":
+    if not torch_extension_available():
         return None
 
     if not supports_installed_vllm():
@@ -574,6 +554,7 @@ def register_vllm_greedy_sample_logprobs() -> str | None:
     )
     from vllm.v1.sample.sampler import Sampler
 
+    load_torch_extension()
     implementation = torch.ops.loom_kernels.greedy_sample_logprobs.default
     original_forward = Sampler.forward
 
@@ -730,17 +711,13 @@ def register_vllm_selected_token_logprobs() -> str | None:
     if register_vllm_greedy_sample_logprobs() is None:
         return None
 
-    from .torch_ops import adapter_backend
-
-    if adapter_backend() != "cpp-dispatch":
-        return None
-
     if not supports_installed_vllm():
         return None
 
     from vllm.v1.outputs import LogprobsTensors, SamplerOutput
     from vllm.v1.sample.sampler import Sampler
 
+    load_torch_extension()
     implementation = torch.ops.loom_kernels.selected_token_logprobs.default
     original_forward = Sampler.forward
 
@@ -881,23 +858,17 @@ def register_vllm_min_p() -> str | None:
     global _MIN_P_REGISTERED
     if _MIN_P_REGISTERED:
         return MIN_P_OVERRIDE_KEY
-    if not native_available():
+    if not torch_extension_available():
         return None
 
-    from .torch_ops import (
-        _min_p_filter_unchecked,
-        adapter_backend,
-        supports_min_p_filter,
-    )
-
-    if adapter_backend() != "cpp-dispatch":
-        return None
+    from .torch_ops import supports_min_p_filter
 
     if not supports_installed_vllm():
         return None
 
     from vllm.v1.sample.logits_processor.builtin import MinPLogitsProcessor
 
+    implementation = torch.ops.loom_kernels.min_p_filter_.default
     original_apply = MinPLogitsProcessor.apply
 
     def apply(self, logits: torch.Tensor) -> torch.Tensor:
@@ -909,7 +880,7 @@ def register_vllm_min_p() -> str | None:
             or logits.shape[1] < MIN_P_FAST_PATH_MIN_VOCAB_SIZE
         ):
             return original_apply(self, logits)
-        _min_p_filter_unchecked(logits, self.min_p)
+        implementation(logits, self.min_p)
         return logits
 
     apply.__module__ = __name__
@@ -921,17 +892,13 @@ def register_vllm_min_p() -> str | None:
 
 def register_vllm_ir(provider: str = DEFAULT_PROVIDER) -> str | None:
     """Register Loom as an in-place fused_add_rms_norm IR provider."""
-    if not supports_installed_vllm():
+    if not supports_installed_vllm() or not torch_extension_available():
         return None
 
     from vllm import ir
     import vllm.ir.ops.layernorm  # noqa: F401 - registers the IR operation
 
-    from .torch_ops import (
-        _add_rms_norm_mut_unchecked,
-        adapter_backend,
-        supports_vllm_add_rms_norm,
-    )
+    from .torch_ops import supports_add_rms_norm
 
     if _silu_override_requested():
         register_vllm_silu_and_mul()
@@ -956,7 +923,9 @@ def register_vllm_ir(provider: str = DEFAULT_PROVIDER) -> str | None:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if weight is None or variance_size is not None:
             raise ValueError("unsupported Loom Add+RMSNorm contract reached dispatch")
-        _add_rms_norm_mut_unchecked(x, x_residual, weight, epsilon)
+        torch.ops.loom_kernels.add_rms_norm_mut.default(
+            x, x_residual, weight, epsilon
+        )
         return x, x_residual
 
     def supports(
@@ -966,24 +935,21 @@ def register_vllm_ir(provider: str = DEFAULT_PROVIDER) -> str | None:
         epsilon: float,
         variance_size: int | None = None,
     ) -> bool:
-        return supports_vllm_add_rms_norm(
+        return supports_add_rms_norm(
             x, x_residual, weight, epsilon, variance_size
         )
 
     decorator = operation.register_impl(
         provider,
-        supported=native_available(),
+        supported=torch_extension_available(),
         supports_args=supports,
         inplace=True,
     )
     decorator(implementation)
-    operation.impls[provider].adapter_backend = adapter_backend()
     return provider
 
 
 def provider_metadata() -> dict[str, Any]:
-    from .torch_ops import adapter_backend
-
     return {
         "provider": DEFAULT_PROVIDER,
         "vllm_version": installed_vllm_version(),
@@ -991,10 +957,9 @@ def provider_metadata() -> dict[str, Any]:
         "supported_vllm_series": [
             f"{major}.{minor}" for major, minor in SUPPORTED_VLLM_SERIES
         ],
-        "native_available": native_available(),
+        "extension_available": torch_extension_available(),
         "operator": "fused_add_rms_norm",
         "inplace": True,
-        "adapter_backend": adapter_backend(),
         "silu_and_mul_override_requested": _silu_override_requested(),
         "silu_and_mul_override": _SILU_OVERRIDE_CLASS is not None,
         "silu_and_mul_fp8_override_requested": _act_quant_override_requested(),

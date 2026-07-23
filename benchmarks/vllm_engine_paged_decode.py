@@ -198,16 +198,13 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     from vllm import LLM, SamplingParams
 
     from loom_kernels.torch_ops import (
-        adapter_backend,
-        paged_decode_attention_launch_count,
-        reset_paged_decode_attention_launch_count,
+        Operator,
+        launch_count,
+        reset_launch_count,
     )
     from loom_kernels.vllm import provider_metadata
 
-    if adapter_backend() != "cpp-dispatch":
-        raise RuntimeError("engine evidence requires the C++ dispatcher bridge")
-
-    reset_paged_decode_attention_launch_count()
+    reset_launch_count(Operator.PAGED_DECODE_ATTENTION)
     model_path = Path(args.model).expanduser()
     model = str(model_path.resolve()) if model_path.exists() else args.model
     max_model_len = max(case.input_len + case.output_len for case in args.cases)
@@ -222,12 +219,12 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         seed=args.seed,
         disable_log_stats=True,
     )
-    launches_after_engine_init = paged_decode_attention_launch_count()
+    launches_after_engine_init = launch_count(Operator.PAGED_DECODE_ATTENTION)
     cases = [
         run_case(engine, SamplingParams, case, args.warmup, args.repeats)
         for case in args.cases
     ]
-    launch_count = paged_decode_attention_launch_count()
+    host_launch_count = launch_count(Operator.PAGED_DECODE_ATTENTION)
     report = {
         "provider": provider,
         "model": model,
@@ -239,7 +236,7 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
         "cases": cases,
         "loom_path": {
             "launches_after_engine_init": launches_after_engine_init,
-            "host_launch_count": launch_count,
+            "host_launch_count": host_launch_count,
             "provider_metadata": provider_metadata(),
             "counter_semantics": (
                 "host submissions during graph construction or eager execution; "
@@ -258,7 +255,7 @@ def run_provider(args: argparse.Namespace) -> dict[str, Any]:
     args.internal_result.parent.mkdir(parents=True, exist_ok=True)
     args.internal_result.write_text(json.dumps(report, indent=2) + "\n")
     print(
-        f"provider={provider} host_launch_count={launch_count}",
+        f"provider={provider} host_launch_count={host_launch_count}",
         file=sys.stderr,
     )
     return report

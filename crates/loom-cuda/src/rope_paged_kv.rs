@@ -1,6 +1,6 @@
 use crate::rms_norm::CudaBackend;
 use crate::runtime::{loom_status_result, CudaDeviceRead, CudaDeviceWrite, CudaStreamHandle};
-use crate::CudaExecutorError;
+use crate::{CudaExecutorError, RopePagedKvLayout};
 use half::{bf16, f16};
 use loom_kernels::{DType, RopePagedKvWriteSpec, RotaryStyle};
 
@@ -18,6 +18,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         value_cache: &mut impl CudaDeviceWrite<f32>,
         slot_mapping: &impl CudaDeviceRead<i64>,
         spec: RopePagedKvWriteSpec,
+        layout: RopePagedKvLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::F32)?;
         let shape = validate_buffers(
@@ -30,6 +31,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
             value_cache,
             slot_mapping,
             spec,
+            layout,
         )?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_rope_paged_kv_write_f32(
@@ -82,6 +84,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         value_cache: &mut impl CudaDeviceWrite<f16>,
         slot_mapping: &impl CudaDeviceRead<i64>,
         spec: RopePagedKvWriteSpec,
+        layout: RopePagedKvLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::F16)?;
         let shape = validate_buffers(
@@ -94,6 +97,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
             value_cache,
             slot_mapping,
             spec,
+            layout,
         )?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_rope_paged_kv_write_f16(
@@ -146,6 +150,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         value_cache: &mut impl CudaDeviceWrite<bf16>,
         slot_mapping: &impl CudaDeviceRead<i64>,
         spec: RopePagedKvWriteSpec,
+        layout: RopePagedKvLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::Bf16)?;
         let shape = validate_buffers(
@@ -158,6 +163,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
             value_cache,
             slot_mapping,
             spec,
+            layout,
         )?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_rope_paged_kv_write_bf16(
@@ -247,83 +253,33 @@ fn validate_buffers<T: Copy>(
     value_cache: &impl CudaDeviceRead<T>,
     slot_mapping: &impl CudaDeviceRead<i64>,
     spec: RopePagedKvWriteSpec,
+    layout: RopePagedKvLayout,
 ) -> Result<AbiShape, CudaExecutorError> {
     let rotary = spec.rotary();
-    query.require_len(rotary.query_numel(), "RoPE query")?;
-    key.require_len(rotary.key_numel(), "RoPE key")?;
-    value.require_len(spec.value_numel(), "RoPE value")?;
+    query.require_len(layout.query_storage_elements(spec)?, "RoPE query")?;
+    key.require_len(layout.key_storage_elements(spec)?, "RoPE key")?;
+    value.require_len(layout.value_storage_elements(spec)?, "RoPE value")?;
     positions.require_len(rotary.tokens(), "RoPE positions")?;
     cos_sin_cache.require_len(rotary.cos_sin_cache_numel(), "RoPE cos/sin cache")?;
-    key_cache.require_len(spec.key_cache_numel(), "paged key cache")?;
-    value_cache.require_len(spec.value_cache_numel(), "paged value cache")?;
-    slot_mapping.require_len(rotary.tokens(), "paged slot mapping")?;
+    key_cache.require_len(layout.key_cache_storage_elements(spec)?, "paged key cache")?;
+    value_cache.require_len(
+        layout.value_cache_storage_elements(spec)?,
+        "paged value cache",
+    )?;
+    slot_mapping.require_len(layout.cache_tokens(), "paged slot mapping")?;
 
     let u32_value = |value: usize, name: &str| {
         u32::try_from(value)
             .map_err(|_| CudaExecutorError::InvalidContract(format!("{name} exceeds the CUDA ABI")))
     };
-    let source_key_head_stride = u64::try_from(rotary.head_size())
-        .map_err(|_| CudaExecutorError::InvalidContract("key head stride overflow".into()))?;
-    let query_head_stride = source_key_head_stride;
-    let query_token_stride = u64::try_from(
-        rotary
-            .query_heads()
-            .checked_mul(rotary.head_size())
-            .ok_or_else(|| {
-                CudaExecutorError::InvalidContract("query token stride overflow".into())
-            })?,
-    )
-    .map_err(|_| CudaExecutorError::InvalidContract("query token stride overflow".into()))?;
-    let key_token_stride = u64::try_from(
-        rotary
-            .key_heads()
-            .checked_mul(rotary.head_size())
-            .ok_or_else(|| {
-                CudaExecutorError::InvalidContract("key token stride overflow".into())
-            })?,
-    )
-    .map_err(|_| CudaExecutorError::InvalidContract("key token stride overflow".into()))?;
-    let key_head_stride = u64::try_from(rotary.head_size())
-        .map_err(|_| CudaExecutorError::InvalidContract("key head stride overflow".into()))?;
-    let key_page_stride = u64::try_from(
-        rotary
-            .key_heads()
-            .checked_mul(rotary.head_size())
-            .ok_or_else(|| CudaExecutorError::InvalidContract("key page stride overflow".into()))?,
-    )
-    .map_err(|_| CudaExecutorError::InvalidContract("key page stride overflow".into()))?;
-    let key_block_stride = key_page_stride
-        .checked_mul(spec.block_size() as u64)
-        .ok_or_else(|| CudaExecutorError::InvalidContract("key block stride overflow".into()))?;
-    let source_value_head_stride = u64::try_from(spec.value_head_size())
-        .map_err(|_| CudaExecutorError::InvalidContract("value head stride overflow".into()))?;
-    let value_token_stride = u64::try_from(
-        rotary
-            .key_heads()
-            .checked_mul(spec.value_head_size())
-            .ok_or_else(|| {
-                CudaExecutorError::InvalidContract("value token stride overflow".into())
-            })?,
-    )
-    .map_err(|_| CudaExecutorError::InvalidContract("value token stride overflow".into()))?;
-    let value_head_stride = u64::try_from(spec.value_head_size())
-        .map_err(|_| CudaExecutorError::InvalidContract("value head stride overflow".into()))?;
-    let value_page_stride = u64::try_from(
-        rotary
-            .key_heads()
-            .checked_mul(spec.value_head_size())
-            .ok_or_else(|| {
-                CudaExecutorError::InvalidContract("value page stride overflow".into())
-            })?,
-    )
-    .map_err(|_| CudaExecutorError::InvalidContract("value page stride overflow".into()))?;
-    let value_block_stride = value_page_stride
-        .checked_mul(spec.block_size() as u64)
-        .ok_or_else(|| CudaExecutorError::InvalidContract("value block stride overflow".into()))?;
+    let u64_value = |value: usize, name: &str| {
+        u64::try_from(value)
+            .map_err(|_| CudaExecutorError::InvalidContract(format!("{name} exceeds the CUDA ABI")))
+    };
 
     Ok(AbiShape {
         tokens: u32_value(rotary.tokens(), "token count")?,
-        cache_tokens: u32_value(rotary.tokens(), "cache token count")?,
+        cache_tokens: u32_value(layout.cache_tokens(), "cache token count")?,
         query_heads: u32_value(rotary.query_heads(), "query head count")?,
         kv_heads: u32_value(rotary.key_heads(), "KV head count")?,
         head_size: u32_value(rotary.head_size(), "head size")?,
@@ -332,18 +288,24 @@ fn validate_buffers<T: Copy>(
         max_position: u32_value(rotary.max_position(), "maximum position")?,
         num_blocks: u32_value(spec.num_blocks(), "cache block count")?,
         block_size: u32_value(spec.block_size(), "cache block size")?,
-        query_token_stride,
-        query_head_stride,
-        key_token_stride,
-        source_key_head_stride,
-        value_token_stride,
-        source_value_head_stride,
-        key_block_stride,
-        key_page_stride,
-        key_head_stride,
-        value_block_stride,
-        value_page_stride,
-        value_head_stride,
+        query_token_stride: u64_value(layout.query_token_stride(), "query token stride")?,
+        query_head_stride: u64_value(layout.query_head_stride(), "query head stride")?,
+        key_token_stride: u64_value(layout.key_token_stride(), "key token stride")?,
+        source_key_head_stride: u64_value(
+            layout.source_key_head_stride(),
+            "source key head stride",
+        )?,
+        value_token_stride: u64_value(layout.value_token_stride(), "value token stride")?,
+        source_value_head_stride: u64_value(
+            layout.source_value_head_stride(),
+            "source value head stride",
+        )?,
+        key_block_stride: u64_value(layout.key_block_stride(), "key block stride")?,
+        key_page_stride: u64_value(layout.key_page_stride(), "key page stride")?,
+        key_head_stride: u64_value(layout.key_head_stride(), "key cache head stride")?,
+        value_block_stride: u64_value(layout.value_block_stride(), "value block stride")?,
+        value_page_stride: u64_value(layout.value_page_stride(), "value page stride")?,
+        value_head_stride: u64_value(layout.value_head_stride(), "value cache head stride")?,
         is_neox: u32::from(rotary.style() == RotaryStyle::NeoX),
     })
 }
@@ -406,6 +368,7 @@ mod tests {
                 &mut value_cache_device,
                 &slots_device,
                 spec,
+                RopePagedKvLayout::contiguous(spec).unwrap(),
             )
             .unwrap();
         backend.stream().synchronize().unwrap();

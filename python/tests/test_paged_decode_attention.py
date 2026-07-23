@@ -7,13 +7,12 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from loom_kernels.torch_ops import (
+    Operator,
     PAGED_DECODE_MAX_CONTEXT,
-    adapter_backend,
+    launch_count,
     paged_decode_attention,
-    paged_decode_attention_launch_count,
     paged_decode_attention_out,
-    paged_decode_attention_unchecked_custom_op,
-    reset_paged_decode_attention_launch_count,
+    reset_launch_count,
     supports_paged_decode_attention,
 )
 
@@ -174,7 +173,6 @@ def test_paged_decode_matches_randomized_pytorch_oracle(dtype, case):
     )
     torch.cuda.synchronize()
 
-    assert adapter_backend() == "cpp-dispatch"
     tolerance = {
         torch.float32: (3.0e-4, 3.0e-5),
         torch.float16: (3.0e-3, 3.0e-3),
@@ -289,7 +287,7 @@ def test_paged_decode_schema_survives_opcheck_and_torch_compile():
     )
     arguments = (*tensors, output, int(sequence_lengths.max().item()), 0.25)
     torch.library.opcheck(
-        paged_decode_attention_unchecked_custom_op(),
+        torch.ops.loom_kernels.paged_decode_attention.default,
         arguments,
         test_utils=("test_schema", "test_faketensor"),
     )
@@ -303,7 +301,7 @@ def test_paged_decode_schema_survives_opcheck_and_torch_compile():
         lengths: torch.Tensor,
         out: torch.Tensor,
     ) -> torch.Tensor:
-        torch.ops.loom_kernels.paged_decode_attention_unchecked(
+        torch.ops.loom_kernels.paged_decode_attention(
             q, k, v, tables, lengths, out, 21, 0.25
         )
         return out
@@ -327,10 +325,10 @@ def test_paged_decode_contract_and_launch_telemetry():
         lengths=[5, 19],
         seed=607,
     )
-    reset_paged_decode_attention_launch_count()
+    reset_launch_count(Operator.PAGED_DECODE_ATTENTION)
     paged_decode_attention(*tensors, max_sequence_length=19)
     torch.cuda.synchronize()
-    assert paged_decode_attention_launch_count() == 1
+    assert launch_count(Operator.PAGED_DECODE_ATTENTION) == 1
 
     query, key_cache, value_cache, block_tables, sequence_lengths = tensors
     with pytest.raises(RuntimeError, match="1024"):

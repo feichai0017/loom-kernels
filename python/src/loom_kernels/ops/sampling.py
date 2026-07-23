@@ -4,13 +4,11 @@ from __future__ import annotations
 
 import torch
 
+from .._torch_dispatch import (
+    _greedy_sample_logprobs,
+    _selected_token_logprobs,
+)
 from ._common import _DTYPE_NAMES
-
-
-def _dispatch():
-    from .. import _torch_dispatch
-
-    return _torch_dispatch
 
 
 def supports_greedy_sample_logprobs(logits: torch.Tensor) -> bool:
@@ -44,28 +42,19 @@ def supports_selected_token_logprobs(
     )
 
 
-
 def _validate_greedy_sample_logits(
     logits: torch.Tensor,
-) -> tuple[str, int, int, int]:
+) -> None:
     if not supports_greedy_sample_logprobs(logits):
         raise ValueError(
             "Loom greedy sampling requires finite, non-empty rank-2 "
             "F32/FP16/BF16 CUDA logits with unit vocabulary stride, "
             "non-overlapping rows, and no gradients"
         )
-    return (
-        _DTYPE_NAMES[logits.dtype],
-        logits.shape[0],
-        logits.shape[1],
-        logits.stride(0),
-    )
-
-
 def _validate_selected_token_logprobs(
     logits: torch.Tensor,
     token_ids: torch.Tensor,
-) -> tuple[str, int, int, int]:
+) -> None:
     if not supports_selected_token_logprobs(logits, token_ids):
         raise ValueError(
             "Loom selected-token logprobs require finite, non-empty rank-2 "
@@ -73,21 +62,12 @@ def _validate_selected_token_logprobs(
             "same-device contiguous int64 token ID per row; token IDs must "
             "be in vocabulary range"
         )
-    return (
-        _DTYPE_NAMES[logits.dtype],
-        logits.shape[0],
-        logits.shape[1],
-        logits.stride(0),
-    )
-
-
-
 def greedy_sample_logprobs(
     logits: torch.Tensor,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Return greedy IDs, sampled logprobs, and vLLM-compatible tie ranks."""
     _validate_greedy_sample_logits(logits)
-    return _dispatch()._greedy_sample_logprobs(logits)
+    return _greedy_sample_logprobs(logits)
 
 
 def selected_token_logprobs(
@@ -96,62 +76,4 @@ def selected_token_logprobs(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return normalized logprobs and ranks for one selected token per row."""
     _validate_selected_token_logprobs(logits, token_ids)
-    return _dispatch()._selected_token_logprobs(logits, token_ids)
-
-
-def greedy_sample_logprobs_custom_op():
-    """Expose fused greedy sampling for dispatcher and FakeTensor checks."""
-    return _dispatch()._greedy_sample_logprobs
-
-
-def selected_token_logprobs_custom_op():
-    """Expose selected-token normalization for dispatcher/FakeTensor checks."""
-    return _dispatch()._selected_token_logprobs
-
-
-def greedy_sample_logprobs_launch_count() -> int:
-    """Return host submissions through the fused greedy sampling boundary."""
-    if _dispatch()._EXTENSION_PATH is None:
-        raise RuntimeError("launch telemetry requires the C++ dispatcher bridge")
-    return int(torch.ops.loom_kernels.greedy_sample_logprobs_launch_count())
-
-
-def reset_greedy_sample_logprobs_launch_count() -> None:
-    """Reset host-side greedy sampling launch telemetry."""
-    if _dispatch()._EXTENSION_PATH is None:
-        raise RuntimeError("launch telemetry requires the C++ dispatcher bridge")
-    torch.ops.loom_kernels.reset_greedy_sample_logprobs_launch_count()
-
-
-def greedy_sample_logprobs_rust_bridge_launch_count() -> int:
-    """Return successful contiguous greedy submissions through Rust."""
-    if _dispatch()._EXTENSION_PATH is None:
-        raise RuntimeError(
-            "Rust bridge telemetry requires the prebuilt PyTorch extension"
-        )
-    return int(
-        torch.ops.loom_kernels.greedy_sample_logprobs_rust_bridge_launch_count()
-    )
-
-
-def reset_greedy_sample_logprobs_rust_bridge_launch_count() -> None:
-    """Reset contiguous greedy-sampling Rust bridge telemetry."""
-    if _dispatch()._EXTENSION_PATH is None:
-        raise RuntimeError(
-            "Rust bridge telemetry requires the prebuilt PyTorch extension"
-        )
-    torch.ops.loom_kernels.reset_greedy_sample_logprobs_rust_bridge_launch_count()
-
-
-def selected_token_logprobs_launch_count() -> int:
-    """Return host submissions through selected-token normalization."""
-    if _dispatch()._EXTENSION_PATH is None:
-        raise RuntimeError("launch telemetry requires the C++ dispatcher bridge")
-    return int(torch.ops.loom_kernels.selected_token_logprobs_launch_count())
-
-
-def reset_selected_token_logprobs_launch_count() -> None:
-    """Reset host-side selected-token logprob launch telemetry."""
-    if _dispatch()._EXTENSION_PATH is None:
-        raise RuntimeError("launch telemetry requires the C++ dispatcher bridge")
-    torch.ops.loom_kernels.reset_selected_token_logprobs_launch_count()
+    return _selected_token_logprobs(logits, token_ids)

@@ -34,8 +34,8 @@ The published Rust crates are self-contained source distributions. The Python
 wheel currently contains Python adapters only; users build these native
 libraries against their local CUDA and PyTorch installations:
 
-- `libloom_kernels_cuda.so` — handwritten CUDA C ABI;
-- `libloom_cuda_bridge.so` — checked bridge into borrowed safe Rust dispatch;
+- `libloom_cuda_bridge.so` — Rust contracts, borrowed safe dispatch, and the
+  internal handwritten CUDA launch layer;
 - `libloom_kernels_torch.so` — PyTorch dispatcher shim.
 
 The dispatcher currently includes standard ATen/LibTorch headers and uses

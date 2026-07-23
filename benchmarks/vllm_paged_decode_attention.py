@@ -13,8 +13,10 @@ from typing import Callable
 
 import torch
 
-from loom_kernels._native import launch_paged_decode_attention
-from loom_kernels.torch_ops import PAGED_DECODE_MAX_CONTEXT, adapter_backend
+from loom_kernels.torch_ops import (
+    PAGED_DECODE_MAX_CONTEXT,
+    bridge_abi_version,
+)
 
 
 DTYPES = {"f16": torch.float16, "bf16": torch.bfloat16}
@@ -41,11 +43,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=500)
     parser.add_argument("--samples", type=int, default=7)
     parser.add_argument("--seed", type=int, default=709)
-    parser.add_argument(
-        "--compare-legacy",
-        action="store_true",
-        help="also measure Loom's allocation-free single-CTA C ABI",
-    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -150,7 +147,6 @@ def benchmark_case(
     iterations: int,
     samples: int,
     seed: int,
-    compare_legacy: bool,
     flash_attn_varlen_func: Callable[..., torch.Tensor],
     fa_version: int,
 ) -> dict[str, object]:
@@ -188,11 +184,10 @@ def benchmark_case(
     cu_seqlens_q = torch.arange(batch + 1, device="cuda", dtype=torch.int32)
     scale = head_size**-0.5
     loom_output = torch.empty_like(query)
-    legacy_output = torch.empty_like(query) if compare_legacy else None
     baseline_output = torch.empty_like(query)
 
     def loom() -> None:
-        torch.ops.loom_kernels.paged_decode_attention_unchecked(
+        torch.ops.loom_kernels.paged_decode_attention(
             query,
             key_cache,
             value_cache,
@@ -201,32 +196,6 @@ def benchmark_case(
             loom_output,
             context,
             scale,
-        )
-
-    def legacy() -> None:
-        if legacy_output is None:
-            raise RuntimeError("legacy provider was not requested")
-        launch_paged_decode_attention(
-            "f16" if dtype == torch.float16 else "bf16",
-            query.data_ptr(),
-            key_cache.data_ptr(),
-            value_cache.data_ptr(),
-            block_tables.data_ptr(),
-            sequence_lengths.data_ptr(),
-            legacy_output.data_ptr(),
-            batch,
-            query_heads,
-            kv_heads,
-            head_size,
-            head_size,
-            num_blocks,
-            block_size,
-            key_cache.stride(0),
-            value_cache.stride(0),
-            max_blocks,
-            context,
-            scale,
-            torch.cuda.current_stream().cuda_stream,
         )
 
     def baseline() -> None:
@@ -247,23 +216,14 @@ def benchmark_case(
 
     loom()
     baseline()
-    if compare_legacy:
-        legacy()
     torch.cuda.synchronize()
     torch.testing.assert_close(
         loom_output, baseline_output, rtol=2.0e-2, atol=2.0e-2
     )
-    if legacy_output is not None:
-        torch.testing.assert_close(
-            loom_output, legacy_output, rtol=2.0e-2, atol=2.0e-2
-        )
-
     operations: dict[str, Callable[[], object]] = {
         "loom": loom,
         "vllm_flash_attention": baseline,
     }
-    if compare_legacy:
-        operations["loom_legacy"] = legacy
     measurements = measure_operations(
         operations, warmup, iterations, samples
     )
@@ -285,24 +245,6 @@ def benchmark_case(
             (loom_output.float() - baseline_output.float()).abs().max().item()
         ),
     }
-    if legacy_output is not None:
-        legacy_measurement = measurements["loom_legacy"]
-        legacy_eager = legacy_measurement["eager_dispatch_latency"]["median_us"]
-        legacy_graph = legacy_measurement["cuda_graph_replay_latency"]["median_us"]
-        result.update(
-            {
-                "loom_legacy": legacy_measurement,
-                "split_k_eager_speedup_over_legacy": legacy_eager / loom_eager,
-                "split_k_cuda_graph_speedup_over_legacy": legacy_graph
-                / loom_graph,
-                "split_k_vs_legacy_max_abs_error": float(
-                    (loom_output.float() - legacy_output.float())
-                    .abs()
-                    .max()
-                    .item()
-                ),
-            }
-        )
     return result
 
 
@@ -310,8 +252,6 @@ def main() -> None:
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
-    if adapter_backend() != "cpp-dispatch":
-        raise RuntimeError("benchmark requires the Loom C++ dispatcher bridge")
     if args.query_heads % args.kv_heads:
         raise ValueError("query-heads must be divisible by kv-heads")
     if min(args.warmup, args.iterations, args.samples) <= 0:
@@ -351,7 +291,6 @@ def main() -> None:
             iterations=args.iterations,
             samples=args.samples,
             seed=args.seed,
-            compare_legacy=args.compare_legacy,
             flash_attn_varlen_func=flash_attn_varlen_func,
             fa_version=fa_version,
         )
@@ -362,7 +301,7 @@ def main() -> None:
         "schema_version": 1,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "operator": "single-token paged MQA/GQA decode attention",
-        "candidate": "Loom paged_decode_attention_unchecked",
+        "candidate": "Loom paged_decode_attention",
         "baseline": f"vLLM {vllm.__version__} FlashAttention varlen FA{fa_version}",
         "scope": {
             "dtype": args.dtype,
@@ -373,7 +312,6 @@ def main() -> None:
             "block_size": args.block_size,
             "cache_layout": "NHD",
             "cache_storage": args.cache_storage,
-            "compare_legacy": args.compare_legacy,
             "key_block_stride": (
                 (2 if args.cache_storage == "vllm-interleaved" else 1)
                 * args.block_size
@@ -405,7 +343,7 @@ def main() -> None:
             "torch_cuda": torch.version.cuda,
             "vllm": vllm.__version__,
             "flash_attention_version": fa_version,
-            "adapter_backend": adapter_backend(),
+            "bridge_abi_version": bridge_abi_version(),
         },
         "acceptance": {
             "passed": True,

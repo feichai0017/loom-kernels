@@ -105,13 +105,29 @@ fn main() -> BenchResult<()> {
             &args,
             f16::from_f32,
             silu_and_mul_dynamic_fp8_f16_reference,
-            CudaBackend::silu_and_mul_dynamic_fp8_f16,
+            |backend, input, output, scales, spec| {
+                backend.silu_and_mul_dynamic_fp8_f16(
+                    input,
+                    output,
+                    scales,
+                    spec,
+                    Default::default(),
+                )
+            },
         )?,
         BenchDType::Bf16 => run_typed(
             &args,
             bf16::from_f32,
             silu_and_mul_dynamic_fp8_bf16_reference,
-            CudaBackend::silu_and_mul_dynamic_fp8_bf16,
+            |backend, input, output, scales, spec| {
+                backend.silu_and_mul_dynamic_fp8_bf16(
+                    input,
+                    output,
+                    scales,
+                    spec,
+                    Default::default(),
+                )
+            },
         )?,
     };
 

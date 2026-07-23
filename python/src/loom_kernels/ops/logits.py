@@ -4,13 +4,8 @@ from __future__ import annotations
 
 import torch
 
+from .._torch_dispatch import _min_p_filter
 from ._common import _DTYPE_NAMES
-
-
-def _dispatch():
-    from .. import _torch_dispatch
-
-    return _torch_dispatch
 
 
 def supports_min_p_filter(logits: torch.Tensor, min_p: torch.Tensor) -> bool:
@@ -47,47 +42,15 @@ def supports_min_p_filter(logits: torch.Tensor, min_p: torch.Tensor) -> bool:
 def _validate_min_p_filter(
     logits: torch.Tensor,
     min_p: torch.Tensor,
-) -> tuple[str, int, int, int]:
+) -> None:
     if not supports_min_p_filter(logits, min_p):
         raise ValueError(
             "Loom min-p filtering requires non-empty rank-2 F32/FP16/BF16 "
             "CUDA logits with unit vocabulary stride and same-device "
             "contiguous F32 probabilities shaped [rows] or [rows, 1]"
         )
-    return (
-        _DTYPE_NAMES[logits.dtype],
-        logits.shape[0],
-        logits.shape[1],
-        logits.stride(0),
-    )
-
-
 def min_p_filter_(logits: torch.Tensor, min_p: torch.Tensor) -> torch.Tensor:
     """Filter logits in place using each row's max-probability ratio."""
     _validate_min_p_filter(logits, min_p)
-    _dispatch()._min_p_filter(logits, min_p)
+    _min_p_filter(logits, min_p)
     return logits
-
-
-def min_p_filter_custom_op():
-    """Expose the checked min-p operator for dispatcher validation."""
-    return _dispatch()._min_p_filter
-
-
-def min_p_filter_unchecked_custom_op():
-    """Expose the hot-path min-p operator used by engine adapters."""
-    return _dispatch()._min_p_filter_unchecked
-
-
-def min_p_filter_launch_count() -> int:
-    """Return host submissions through Loom's min-p dispatcher boundary."""
-    if _dispatch()._EXTENSION_PATH is None:
-        raise RuntimeError("launch telemetry requires the C++ dispatcher bridge")
-    return int(torch.ops.loom_kernels.min_p_filter_launch_count())
-
-
-def reset_min_p_filter_launch_count() -> None:
-    """Reset host-side min-p launch telemetry."""
-    if _dispatch()._EXTENSION_PATH is None:
-        raise RuntimeError("launch telemetry requires the C++ dispatcher bridge")
-    torch.ops.loom_kernels.reset_min_p_filter_launch_count()

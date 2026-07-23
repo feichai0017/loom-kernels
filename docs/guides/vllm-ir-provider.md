@@ -73,16 +73,14 @@ CUDA_HOME=/usr/local/cuda \
   .venv-vllm/bin/python python/build_torch_extension.py
 ```
 
-The first command builds `build/libloom_kernels_cuda.so` and the checked
-`build/libloom_cuda_bridge.so` from the same CUDA sources used by the Rust
-backend. The second builds a small C++ dispatcher shim at
-`build/libloom_kernels_torch.so`; this avoids Python/ctypes overhead on the
-vLLM hot path. Add+RMSNorm, RMSNorm+dynamic-FP8, and contiguous
-greedy+sampled-logprob enter safe Rust borrowed dispatch through the checked
-bridge. Padded greedy rows and the other operator families retain the raw C
-ABI. Repository checkouts discover the files automatically. A packaged
-deployment can set `LOOM_KERNELS_CUDA_LIBRARY` and
-`LOOM_KERNELS_TORCH_LIBRARY` to absolute library paths and must keep
+The first command builds the single native backend,
+`build/libloom_cuda_bridge.so`. The second builds a small C++ schema/dispatcher
+shim at `build/libloom_kernels_torch.so`. Every admitted operator passes
+physical buffer spans, strides, and PyTorch's current stream through the Rust
+bridge into safe borrowed dispatch. There is no Python/ctypes fallback,
+unchecked twin, or direct C++-to-CUDA route. Repository checkouts discover the
+files automatically. A packaged deployment may set
+`LOOM_KERNELS_TORCH_LIBRARY` to an absolute path and must keep
 `libloom_cuda_bridge.so` next to the dispatcher library or in its parent
 directory.
 
@@ -253,9 +251,8 @@ allowed-token mask, bad words, per-request logprob token IDs, thinking-budget
 state, or active argmax-changing logits processor. F32/FP16/BF16 logits may
 have padded rows but require unit vocabulary stride. Every unsupported case
 runs the original vLLM sampler; speculative bonus-token sampling is also
-declined. Registration is version-gated to vLLM 0.24/0.25. Contiguous logits
-enter the checked Rust bridge; padded row strides preserve the existing raw
-CUDA ABI.
+declined. Registration is version-gated to vLLM 0.24/0.25. Both contiguous and
+padded logits enter the same checked Rust bridge with an explicit row stride.
 
 To preserve vLLM's full sampling policy but avoid its full-vocabulary raw
 log-softmax output, use the general registration instead:

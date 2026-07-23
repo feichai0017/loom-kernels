@@ -13,7 +13,7 @@ from typing import Callable
 
 import torch
 
-from loom_kernels.torch_ops import adapter_backend, selected_token_logprobs
+from loom_kernels.torch_ops import bridge_abi_version, selected_token_logprobs
 
 
 DTYPES = {
@@ -168,7 +168,7 @@ def main() -> None:
         "compute_capability": list(torch.cuda.get_device_capability()),
         "torch_version": torch.__version__,
         "vllm_version": vllm.__version__,
-        "adapter_backend": adapter_backend(),
+        "bridge_abi_version": bridge_abi_version(),
         "baseline": (
             "vLLM Sampler.compute_logprobs + "
             "gather_logprobs(num_logprobs=0, caller-selected IDs)"

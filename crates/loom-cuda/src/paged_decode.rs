@@ -1,6 +1,6 @@
 use crate::rms_norm::CudaBackend;
 use crate::runtime::{loom_status_result, CudaDeviceRead, CudaDeviceWrite, CudaStreamHandle};
-use crate::CudaExecutorError;
+use crate::{CudaExecutorError, PagedDecodeLayout};
 use half::{bf16, f16};
 use loom_kernels::{DType, PagedDecodeAttentionSpec};
 
@@ -18,6 +18,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         sequence_lengths: &impl CudaDeviceRead<i32>,
         output: &mut impl CudaDeviceWrite<f32>,
         spec: PagedDecodeAttentionSpec,
+        layout: PagedDecodeLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::F32)?;
         let shape = validate_buffers(
@@ -28,6 +29,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
             sequence_lengths,
             output,
             spec,
+            layout,
         )?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_paged_decode_attention_f32(
@@ -65,6 +67,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         sequence_lengths: &impl CudaDeviceRead<i32>,
         output: &mut impl CudaDeviceWrite<f16>,
         spec: PagedDecodeAttentionSpec,
+        layout: PagedDecodeLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::F16)?;
         let shape = validate_buffers(
@@ -75,6 +78,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
             sequence_lengths,
             output,
             spec,
+            layout,
         )?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_paged_decode_attention_f16(
@@ -112,6 +116,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         sequence_lengths: &impl CudaDeviceRead<i32>,
         output: &mut impl CudaDeviceWrite<bf16>,
         spec: PagedDecodeAttentionSpec,
+        layout: PagedDecodeLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::Bf16)?;
         let shape = validate_buffers(
@@ -122,6 +127,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
             sequence_lengths,
             output,
             spec,
+            layout,
         )?;
         loom_status_result(unsafe {
             loom_cuda_sys::loom_cuda_paged_decode_attention_bf16(
@@ -163,6 +169,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         output: &mut impl CudaDeviceWrite<f32>,
         workspace: &mut impl CudaDeviceWrite<f32>,
         spec: PagedDecodeAttentionSpec,
+        layout: PagedDecodeLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::F32)?;
         let shape = validate_buffers(
@@ -173,6 +180,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
             sequence_lengths,
             output,
             spec,
+            layout,
         )?;
         let workspace_elements = require_split_k_workspace(workspace, shape)?;
         loom_status_result(unsafe {
@@ -214,6 +222,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         output: &mut impl CudaDeviceWrite<f16>,
         workspace: &mut impl CudaDeviceWrite<f32>,
         spec: PagedDecodeAttentionSpec,
+        layout: PagedDecodeLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::F16)?;
         let shape = validate_buffers(
@@ -224,6 +233,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
             sequence_lengths,
             output,
             spec,
+            layout,
         )?;
         let workspace_elements = require_split_k_workspace(workspace, shape)?;
         loom_status_result(unsafe {
@@ -265,6 +275,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
         output: &mut impl CudaDeviceWrite<bf16>,
         workspace: &mut impl CudaDeviceWrite<f32>,
         spec: PagedDecodeAttentionSpec,
+        layout: PagedDecodeLayout,
     ) -> Result<(), CudaExecutorError> {
         require_dtype(spec, DType::Bf16)?;
         let shape = validate_buffers(
@@ -275,6 +286,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
             sequence_lengths,
             output,
             spec,
+            layout,
         )?;
         let workspace_elements = require_split_k_workspace(workspace, shape)?;
         loom_status_result(unsafe {
@@ -310,7 +322,7 @@ impl<S: CudaStreamHandle> CudaBackend<S> {
 pub fn paged_decode_attention_split_k_workspace_elements(
     spec: PagedDecodeAttentionSpec,
 ) -> Result<Option<usize>, CudaExecutorError> {
-    split_k_workspace_elements(abi_shape(spec)?)
+    split_k_workspace_elements(abi_shape(spec, PagedDecodeLayout::contiguous(spec)?)?)
 }
 
 pub(crate) fn supports_spec(spec: PagedDecodeAttentionSpec) -> bool {
@@ -356,7 +368,10 @@ struct AbiShape {
     max_sequence_length: u32,
 }
 
-fn abi_shape(spec: PagedDecodeAttentionSpec) -> Result<AbiShape, CudaExecutorError> {
+fn abi_shape(
+    spec: PagedDecodeAttentionSpec,
+    layout: PagedDecodeLayout,
+) -> Result<AbiShape, CudaExecutorError> {
     if spec.max_sequence_length() > PAGED_DECODE_MAX_CONTEXT {
         return Err(CudaExecutorError::InvalidContract(format!(
             "paged decode maximum context {} exceeds the CUDA kernel limit {PAGED_DECODE_MAX_CONTEXT}",
@@ -384,14 +399,8 @@ fn abi_shape(spec: PagedDecodeAttentionSpec) -> Result<AbiShape, CudaExecutorErr
         value_head_size: u32_value(spec.value_head_size(), "value head size")?,
         num_blocks: u32_value(spec.num_blocks(), "cache block count")?,
         block_size: u32_value(spec.block_size(), "cache block size")?,
-        key_block_stride: u64_value(
-            spec.key_cache_numel() / spec.num_blocks(),
-            "key cache block stride",
-        )?,
-        value_block_stride: u64_value(
-            spec.value_cache_numel() / spec.num_blocks(),
-            "value cache block stride",
-        )?,
+        key_block_stride: u64_value(layout.key_block_stride(), "key cache block stride")?,
+        value_block_stride: u64_value(layout.value_block_stride(), "value cache block stride")?,
         max_blocks_per_sequence: u32_value(
             spec.max_blocks_per_sequence(),
             "maximum blocks per sequence",
@@ -452,14 +461,18 @@ fn validate_buffers<T: Copy>(
     sequence_lengths: &impl CudaDeviceRead<i32>,
     output: &impl CudaDeviceRead<T>,
     spec: PagedDecodeAttentionSpec,
+    layout: PagedDecodeLayout,
 ) -> Result<AbiShape, CudaExecutorError> {
     query.require_len(spec.query_numel(), "paged decode query")?;
-    key_cache.require_len(spec.key_cache_numel(), "paged decode key cache")?;
-    value_cache.require_len(spec.value_cache_numel(), "paged decode value cache")?;
+    key_cache.require_len(layout.key_storage_elements(spec)?, "paged decode key cache")?;
+    value_cache.require_len(
+        layout.value_storage_elements(spec)?,
+        "paged decode value cache",
+    )?;
     block_tables.require_len(spec.block_table_numel(), "paged decode block tables")?;
     sequence_lengths.require_len(spec.sequences(), "paged decode sequence lengths")?;
     output.require_len(spec.output_numel(), "paged decode output")?;
-    abi_shape(spec)
+    abi_shape(spec, layout)
 }
 
 #[cfg(test)]
@@ -470,7 +483,8 @@ mod tests {
 
     #[test]
     fn safe_rust_wrapper_matches_the_cpu_oracle() {
-        let spec = PagedDecodeAttentionSpec::new(2, 4, 2, 4, 3, 4, 2, 2, 0.5, DType::F32).unwrap();
+        let spec =
+            PagedDecodeAttentionSpec::new(2, 4, 2, 4, 3, 4, 2, 2, 4, 0.5, DType::F32).unwrap();
         let query: Vec<f32> = (0..spec.query_numel())
             .map(|index| (index as f32 - 9.0) * 0.07)
             .collect();
@@ -510,6 +524,7 @@ mod tests {
                 &sequence_lengths,
                 &mut output,
                 spec,
+                PagedDecodeLayout::contiguous(spec).unwrap(),
             )
             .unwrap();
         backend.stream().synchronize().unwrap();
@@ -525,7 +540,8 @@ mod tests {
     #[test]
     fn caller_owned_split_k_workspace_matches_the_cpu_oracle() {
         let spec =
-            PagedDecodeAttentionSpec::new(1, 4, 1, 128, 128, 8, 16, 8, 0.125, DType::F32).unwrap();
+            PagedDecodeAttentionSpec::new(1, 4, 1, 128, 128, 8, 16, 8, 128, 0.125, DType::F32)
+                .unwrap();
         let query: Vec<f32> = (0..spec.query_numel())
             .map(|index| (index as f32 % 29.0 - 14.0) * 0.013)
             .collect();
@@ -574,6 +590,7 @@ mod tests {
                 &mut output,
                 &mut workspace,
                 spec,
+                PagedDecodeLayout::contiguous(spec).unwrap(),
             )
             .unwrap();
         backend.stream().synchronize().unwrap();

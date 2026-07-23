@@ -5,12 +5,11 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from loom_kernels.torch_ops import (
-    adapter_backend,
-    reset_vllm_silu_and_mul_per_block_fp8_launch_count,
+    Operator,
+    launch_count,
+    reset_launch_count,
     silu_and_mul_dynamic_fp8,
     silu_and_mul_dynamic_fp8_out,
-    silu_and_mul_dynamic_fp8_unchecked_custom_op,
-    vllm_silu_and_mul_per_block_fp8_launch_count,
 )
 
 
@@ -82,19 +81,12 @@ def test_silu_and_mul_dynamic_fp8_preserves_prefix_and_reuses_buffers():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
-def test_silu_and_mul_dynamic_fp8_schema_passes_torch_opcheck():
-    input_tensor = torch.randn(2, 256, device="cuda", dtype=torch.float16)
-    output = torch.empty(2, 128, device="cuda", dtype=torch.uint8)
-    scales = torch.empty(2, 2, device="cuda", dtype=torch.float32)
-    torch.library.opcheck(
-        silu_and_mul_dynamic_fp8_unchecked_custom_op(),
-        (input_tensor, output, scales, 64),
-        test_utils=("test_schema", "test_faketensor"),
+def test_silu_and_mul_dynamic_fp8_schema_declares_both_mutations():
+    schema = str(
+        torch.ops.loom_kernels.silu_and_mul_dynamic_fp8.default._schema
     )
-
-
-def test_silu_and_mul_dynamic_fp8_uses_cpp_dispatch():
-    assert adapter_backend() == "cpp-dispatch"
+    assert "Tensor(a!) output" in schema
+    assert "Tensor(b!) scales" in schema
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
@@ -109,9 +101,9 @@ def test_silu_and_mul_dynamic_fp8_rejects_invalid_contracts():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
-def test_silu_and_mul_dynamic_fp8_unchecked_survives_torch_compile():
+def test_silu_and_mul_dynamic_fp8_survives_torch_compile():
     def compiled_target(input_tensor, output, scales):
-        torch.ops.loom_kernels.silu_and_mul_dynamic_fp8_unchecked(
+        torch.ops.loom_kernels.silu_and_mul_dynamic_fp8(
             input_tensor, output, scales, 128
         )
         return output, scales
@@ -196,14 +188,14 @@ def test_vllm_compatible_launch_counter_proves_host_dispatch():
     output = torch.empty(4, 256, device="cuda", dtype=torch.float8_e4m3fn)
     scales = torch.empty(4, 2, device="cuda", dtype=torch.float32)
 
-    reset_vllm_silu_and_mul_per_block_fp8_launch_count()
-    assert vllm_silu_and_mul_per_block_fp8_launch_count() == 0
+    reset_launch_count(Operator.SILU_AND_MUL_DYNAMIC_FP8)
+    assert launch_count(Operator.SILU_AND_MUL_DYNAMIC_FP8) == 0
     torch.ops.loom_kernels.silu_and_mul_per_block_fp8(
         output, input_tensor, scales, 128, None, False
     )
     torch.cuda.synchronize()
 
-    assert vllm_silu_and_mul_per_block_fp8_launch_count() == 1
+    assert launch_count(Operator.SILU_AND_MUL_DYNAMIC_FP8) == 1
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")

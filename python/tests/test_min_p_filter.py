@@ -5,9 +5,7 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from loom_kernels.torch_ops import (
-    adapter_backend,
     min_p_filter_,
-    min_p_filter_unchecked_custom_op,
 )
 
 
@@ -33,7 +31,6 @@ def test_min_p_filter_matches_probability_definition(dtype, shape):
     returned = min_p_filter_(logits, min_p)
     torch.cuda.synchronize()
 
-    assert adapter_backend() == "cpp-dispatch"
     assert returned is logits
     assert torch.equal(torch.isneginf(logits), torch.isneginf(expected))
     assert torch.equal(logits[~torch.isneginf(logits)], expected[~torch.isneginf(expected)])
@@ -84,14 +81,14 @@ def test_min_p_filter_schema_survives_opcheck_and_torch_compile():
     logits = torch.randn((3, 257), device="cuda", dtype=torch.float32)
     min_p = torch.tensor([0.0, 0.1, 0.5], device="cuda")
     torch.library.opcheck(
-        min_p_filter_unchecked_custom_op(),
+        torch.ops.loom_kernels.min_p_filter_.default,
         (logits.clone(), min_p),
         test_utils=("test_schema", "test_faketensor"),
     )
 
     @torch.compile(fullgraph=True)
     def compiled(values: torch.Tensor, probabilities: torch.Tensor):
-        torch.ops.loom_kernels.min_p_filter_unchecked_(values, probabilities)
+        torch.ops.loom_kernels.min_p_filter_(values, probabilities)
         return values
 
     inputs = torch.randn((3, 257), device="cuda", dtype=torch.float32)

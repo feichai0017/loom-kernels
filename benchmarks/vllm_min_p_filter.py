@@ -13,7 +13,7 @@ from typing import Callable
 
 import torch
 
-from loom_kernels.torch_ops import adapter_backend, min_p_filter_
+from loom_kernels.torch_ops import bridge_abi_version, min_p_filter_
 from loom_kernels.vllm import (
     MIN_P_FAST_PATH_MIN_ROWS,
     MIN_P_FAST_PATH_MIN_VOCAB_SIZE,
@@ -206,7 +206,7 @@ def main() -> None:
         "compute_capability": list(torch.cuda.get_device_capability()),
         "torch_version": torch.__version__,
         "vllm_version": vllm.__version__,
-        "adapter_backend": adapter_backend(),
+        "bridge_abi_version": bridge_abi_version(),
         "baseline": "vLLM 0.24 MinPLogitsProcessor.apply",
         "candidate": "Loom min_p_filter_",
         "dtype": "f32 (vLLM sampling processor contract)",
