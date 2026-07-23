@@ -81,10 +81,10 @@ isolated microbenchmark is not sufficient.
 
 | Operator | Priority | State | Intended fusion boundary |
 | --- | --- | --- | --- |
-| batched draft-verification metadata and tree/branch mask construction | P0 | next | prepare one vendor-attention verification call without host metadata loops |
+| batched draft-verification metadata and tree/branch mask construction | P0 | profile-gated | prepare one vendor-attention verification call without host metadata loops |
 | greedy draft verification+accepted/bonus-token compaction | P0 | supported | flattened ragged comparison and compact emission without device-to-host control flow |
-| stochastic rejection sampling | P0 | next | residual-distribution acceptance/rejection with explicit counter-based RNG state |
-| speculative KV slot commit, rollback, and remap | P0 | planned | caller-owned cache metadata movement when an engine exposes the boundary |
+| stochastic rejection sampling | P0 | profile-gated | residual-distribution acceptance/rejection with explicit counter-based RNG state |
+| speculative KV slot commit, rollback, and remap | P0 | profile-gated | caller-owned cache metadata movement when an engine exposes the boundary |
 | draft/target model GEMM and verification attention | — | vendor-backed | engine-selected matrix and attention backends; never reimplemented by Loom |
 
 ## Mixture Of Experts
@@ -130,15 +130,15 @@ the boundary or an isolated implementation is measurably useful.
 
 ## Implementation Order
 
-1. With deterministic greedy verification and token compaction complete,
-   finish speculative decoding with tree metadata, stochastic residual
-   sampling, KV commit/remap, and one named draft/target engine A/B.
-2. Add FP8 KV-cache compression with explicit scales and prove cache bytes,
+1. Add FP8 KV-cache compression with explicit scales and prove cache bytes,
    admitted context/batch, quality, and TPOT together.
-3. Complete the sampling tail with fused preprocessing, penalties, top-k/top-p,
+2. Complete the sampling tail with fused preprocessing, penalties, top-k/top-p,
    renormalization, deterministic RNG, and top-k logprobs.
-4. Add KV block movement for a real prefix-cache, preemption, or compaction
+3. Add KV block movement for a real prefix-cache, preemption, or compaction
    call site.
+4. Return to tree metadata, stochastic speculative rejection, or KV
+   commit/remap only when a named engine profile shows material cost. The
+   current real-model gate puts verification below `0.2%` of batch latency.
 5. Fill quantization scale/pack/layout gaps only around an unchanged vendor
    GEMM path.
 6. Add MoE routing, histogram/prefix sum, permutation, and combine; grouped

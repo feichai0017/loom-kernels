@@ -58,7 +58,9 @@ import { evidence, repositoryUrl } from "../data/site";
         faster overall and continues to own the engine's long-context route.
         Greedy speculative verification is bit-exact across 15 ragged batch
         shapes and reaches 1.101–1.128× against vLLM's exact greedy verifier;
-        that result stops at the operator boundary.
+        the real Qwen2.5 draft/target gate reaches the same boundary from vLLM
+        but measures it at only 0.048–0.200% of batch latency. Native/Loom
+        end-to-end ratios cross parity, so no model-level speedup is claimed.
       </p>
 
       <h2>Validation ladder</h2>
@@ -103,6 +105,16 @@ python benchmarks/vllm_silu_and_mul_dynamic_fp8.py \
 .venv-vllm/bin/python benchmarks/vllm_greedy_speculative_verify.py \
   --batches 1,8,32,128,256 --draft-lengths 1,4,8 \
   --warmup 30 --iterations 300 --samples 9
+
+.venv-vllm/bin/python benchmarks/vllm_engine_speculative_decode.py \
+  --tested-revision "$(git rev-parse HEAD)" \
+  --target-model /path/to/Qwen2.5-1.5B-Instruct \
+  --draft-model /path/to/Qwen2.5-0.5B-Instruct \
+  --spec-tokens 4 --prompt-mode natural \
+  --case 1x128x128 --case 8x128x128 --case 32x128x64 \
+  --warmup 2 --repeats 7 --boundary-profile-repeats 3 \
+  --gpu-memory-utilization 0.6 --provider-order native-first \
+  --result-json /tmp/speculative-native-first.json
 
 .venv-vllm/bin/python benchmarks/vllm_paged_decode_attention.py \
   --batches 1,2,4,8 --contexts 128,256,512,1024 \
@@ -154,6 +166,22 @@ python benchmarks/vllm_silu_and_mul_dynamic_fp8.py \
         matched every token and rank within 1.20e-6, with 1440 Loom launches
         only on the candidate side. Batch-latency ratios were 1.044–1.125× and
         TPOT ratios were 1.054–1.130×.
+      </p>
+      <p>
+        The speculative Qwen2.5-1.5B target plus 0.5B draft A/B matches every
+        native/Loom token and acceptance counter in both provider orders, with
+        714 measured Loom launches only on the candidate side. The verifier
+        boundary is 1.026–1.133× faster, but occupies just 0.048–0.200% of
+        batch latency. Native/Loom batch ratios cross parity and the
+        speculative providers are 3.18–4.97× slower than target-only for these
+        cases. This closes real-engine invocation, not acceleration.
+      </p>
+      <p>
+        Target-only and speculative decoding use different target execution
+        shapes. At batch 32, two target-only requests diverge after token 51 or
+        53 while native and Loom speculative providers remain mutually exact.
+        The machine-readable reports preserve those differences and gate the
+        actual verifier replacement A/B.
       </p>
       <p>
         The paged-decode synthetic-Qwen gate uses a stable-output, one-layer

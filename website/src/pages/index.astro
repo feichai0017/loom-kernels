@@ -163,8 +163,10 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
       engine envelope, and a broader Qwen2.5 geometry failed token and latency
       gates, so neither route was widened; serving-scale concurrency, memory,
       and goodput stay separate. Greedy speculative verification is bit-exact
-      and faster at the operator boundary, but its draft/target model gate is
-      still open.
+      and faster at the operator boundary. Its real Qwen2.5 draft/target gate
+      now proves exact native/Loom invocation, but the verifier is below 0.2%
+      of batch latency, end-to-end ratios cross parity, and speculative decode
+      loses to target-only for that workload.
     </p>
   </section>
 
@@ -175,10 +177,10 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "");
         <h2>Build where engines pay.</h2>
       </div>
       <p>
-        With the first native-wheel gate and deterministic speculative
-        verifier complete, the roadmap moves to stochastic/tree verification,
-        KV-cache compression, and the complete sampling tail. Each family must
-        earn its public surface in a real engine.
+        With the first native-wheel and real speculative-engine path gates
+        complete, the roadmap moves to FP8 KV-cache compression and the
+        complete sampling tail. Tree, stochastic, and speculative-KV work now
+        waits for a named profile that shows material cost.
       </p>
     </header>
 

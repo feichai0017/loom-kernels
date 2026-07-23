@@ -61,10 +61,10 @@ workspace and performs no host synchronization.
 constructs ragged metadata, chooses the bonus token, and owns every
 non-greedy or synthetic path.
 
-Registration is explicit because the current evidence closes correctness,
-framework compatibility, and operator latency—not a model-level speculative
-decode gate. Unsupported policy or tensor contracts execute vLLM's original
-implementation.
+Registration is explicit. Current evidence closes correctness, framework
+compatibility, operator latency, and real draft/target engine invocation, but
+not a model-level speedup. Unsupported policy or tensor contracts execute
+vLLM's original implementation.
 
 ## Deliberate Exclusions
 
@@ -84,4 +84,27 @@ The [H20 result](../results/h20-greedy-speculative-verify-20260723.json)
 compares the public Loom call with vLLM 0.24's exact greedy Triton verifier,
 including output allocation and Python dispatch. All 15 batch/draft shapes are
 bit-exact; the measured ratio is `1.101-1.128x`. This is operator-level
-evidence and does not establish model TTFT, TPOT, throughput, or goodput.
+evidence.
+
+The order-reversed [native-first](../results/h20-vllm-qwen25-speculative-native-first-20260723.json)
+and [Loom-first](../results/h20-vllm-qwen25-speculative-loom-first-20260723.json)
+reports use a pinned Qwen2.5-1.5B target, Qwen2.5-0.5B draft, four draft
+tokens, natural prompts, and vLLM 0.24. Native and Loom speculative providers
+match every output token and acceptance counter. Each Loom process records
+`714/714` measured verifier launches, while the other processes record zero.
+Loom reduces the profiled verifier boundary by `2.6-11.7%`, but that boundary
+is only `0.048-0.200%` of batch latency. End-to-end native/Loom ratios cross
+parity when provider order reverses, and both speculative providers are
+`3.18-4.97x` slower than target-only for these cases. The real-engine path is
+therefore proven, while the milestone's performance exit remains open.
+
+Target-only uses a different target-model execution shape. Two of 32
+target-only requests diverge from both speculative providers after token 51
+or 53; the speculative providers remain mutually exact in both orders. The
+reports preserve this numerical-path difference instead of treating
+target-only as the verifier-replacement correctness oracle.
+
+vLLM's dummy sampler warm-up deliberately sets `all_greedy=False`, so lifetime
+fallback telemetry contains one unsupported-contract observation. The gate
+uses the measured-call delta after warm-up: every measured rejection call
+reaches Loom. Optional CUDA-event profiling runs only after primary timing.

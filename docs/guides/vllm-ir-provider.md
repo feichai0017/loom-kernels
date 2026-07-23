@@ -301,9 +301,9 @@ generation, bonus-token selection, attention, GEMM, scheduler state, and every
 stochastic path. Loom consumes contiguous flattened int32 draft IDs, matching
 int64 target IDs, int32 bonus IDs shaped `[requests, 1]`, and inclusive int32
 cumulative draft lengths. Unsupported contracts call the original vLLM
-function. Registration is explicit because the current gate proves exact
-operator behavior and lower verifier latency, not end-to-end speculative
-decode acceleration.
+function. Registration is explicit because the current gates prove exact
+operator behavior, lower verifier latency, and real draft/target engine
+invocation, but not end-to-end speculative decode acceleration.
 
 To preserve vLLM's full sampling policy but avoid its full-vocabulary raw
 log-softmax output, use the general registration instead:
@@ -353,6 +353,20 @@ PY
   --batches 1,8,32,128,256 --draft-lengths 1,4,8 \
   --warmup 30 --iterations 300 --samples 9 \
   --output /tmp/greedy-speculative-verify.json
+
+.venv-vllm/bin/python benchmarks/vllm_engine_speculative_decode.py \
+  --tested-revision "$(git rev-parse HEAD)" \
+  --target-model /path/to/Qwen2.5-1.5B-Instruct \
+  --target-revision 989aa7980e4cf806f80c7fef2b1adb7bc71aa306 \
+  --draft-model /path/to/Qwen2.5-0.5B-Instruct \
+  --draft-revision 7ae557604adf67be50417f59c2c2f167def9a775 \
+  --spec-tokens 4 --prompt-mode natural \
+  --case 1x128x128 --case 8x128x128 --case 32x128x64 \
+  --warmup 2 --repeats 7 --boundary-profile-repeats 3 \
+  --gpu-memory-utilization 0.6 --provider-order native-first \
+  --result-json /tmp/speculative-native-first.json
+
+# Repeat with --provider-order loom-first and a distinct result path.
 
 .venv-vllm/bin/python benchmarks/vllm_ir_add_rms_norm.py \
   --dtype bf16 --rows 8 --hidden-size 4096 \
@@ -555,10 +569,28 @@ flattened ragged rejection output bit-for-bit, including zero-draft requests,
 first mismatches, full acceptance, and bonus-token emission. All 15 H20 cases
 across batches 1-256 and draft lengths 1/4/8 measured `1.101-1.128x` against
 vLLM 0.24's exact Triton verifier through equivalent allocating Python calls.
-Both vLLM minors pass the expanded 202-test source suite. This is an
-operator-level result; no draft/target model A/B has closed the end-to-end
-gate. See the
+Both vLLM minors pass the expanded 202-test source suite. See the
 [H20 verifier report](../results/h20-greedy-speculative-verify-20260723.json).
+
+The process-isolated real-engine gate uses vLLM 0.24 with a pinned
+Qwen2.5-1.5B target and Qwen2.5-0.5B draft. Native and Loom speculative paths
+match every generated token and acceptance counter in both provider orders;
+each Loom run records `714/714` measured verifier launches. Post-timing CUDA
+events show a `1.026-1.133x` verifier-boundary ratio, but the verifier accounts
+for only `0.048-0.200%` of batch latency. Native/Loom end-to-end ratios cross
+parity under order reversal, while speculative decode is `3.18-4.97x` slower
+than target-only for the measured cases. See the
+[native-first](../results/h20-vllm-qwen25-speculative-native-first-20260723.json)
+and [Loom-first](../results/h20-vllm-qwen25-speculative-loom-first-20260723.json)
+reports.
+
+The target-only baseline uses different target execution shapes. At batch 32,
+two target-only trajectories diverge from both mutually exact speculative
+providers after token 51 or 53; the raw reports retain those differences.
+Provider correctness is therefore exact native-vLLM versus Loom speculative
+equivalence. vLLM's dummy sampler warm-up uses a non-greedy metadata fixture,
+so lifetime fallback telemetry is informational; measured Loom launches must
+equal measured rejection calls.
 
 ## Opt-In Min-P Filtering
 

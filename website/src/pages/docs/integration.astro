@@ -124,7 +124,10 @@ min_p_filter_(sampling_logits_f32, min_p_f32)</code></pre>
         current source revision adds speculative verification and passes 202
         tests on each minor; a new native wheel has not been published. The
         same exact K0.7 wheel also passes its applicable Loom gates on PyTorch
-        2.10 without recompilation.
+        2.10 without recompilation. A pinned Qwen2.5 draft/target engine gate
+        proves exact native/Loom speculative invocation on vLLM 0.24; vLLM
+        0.25 has source-suite compatibility evidence but no transferred
+        model-level result.
         Existing model-level performance artifacts remain tied to the version
         recorded in each result; compatibility does not transfer a speedup
         claim. Read the{" "}

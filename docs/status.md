@@ -242,6 +242,16 @@
   0.25.1 through the real `rejection_sample` hook. Across batches 1-256 and
   draft lengths 1/4/8, all 15 vLLM 0.24 baseline cases are bit-exact and the
   dispatcher-level ratio is `1.101-1.128x` (`9.2-11.3%` lower latency);
+- process-isolated vLLM 0.24 runs with a pinned Qwen2.5-1.5B target and
+  Qwen2.5-0.5B draft preserve exact native/Loom speculative tokens and
+  acceptance statistics across both provider orders. Each Loom process records
+  `714/714` measured verifier launches; target and native processes record
+  zero;
+- the post-timing verifier profile measures `1.026-1.133x` native/Loom CUDA
+  boundary ratios, but the boundary is only `0.048-0.200%` of batch latency.
+  Native/Loom end-to-end ratios cross parity, and the tested speculative
+  configuration is `3.18-4.97x` slower than target-only, so no model-level
+  acceleration is claimed;
 - paged-decode focused tests pass 46/46 across F32/FP16/BF16, MQA/GQA,
   odd GQA tail groups, shuffled physical blocks, partial pages, odd head sizes,
   distinct value widths, native vLLM-interleaved cache strides, external
@@ -316,6 +326,13 @@ records the lower vocabulary boundary behind the vLLM routing threshold.
 The [greedy speculative-verifier report](results/h20-greedy-speculative-verify-20260723.json)
 records the flattened ragged contract, complete source-suite matrix, exact
 vLLM output gate, and operator-level latency boundary.
+The order-reversed real-model
+[native-first](results/h20-vllm-qwen25-speculative-native-first-20260723.json)
+and [Loom-first](results/h20-vllm-qwen25-speculative-loom-first-20260723.json)
+reports record pinned model revisions, prompt fingerprints, exact
+native/Loom speculative output, measured path coverage, draft acceptance,
+target-only numerical divergence, end-to-end latency, and the isolated
+verifier-boundary share.
 The original
 [paged decode-attention report](results/h20-paged-decode-attention-20260722.json)
 records separate-cache bring-up. The
@@ -348,8 +365,10 @@ FA3 for the engine's 128-1,024-token path.
 - Min-P real-model invocation and end-to-end serving benefit;
 - Loom-owned logits preprocessing, top-k/top-p, stochastic sampling, and
   general top-k logprob integration;
-- speculative tree/branch metadata, stochastic residual-distribution
-  rejection, KV commit/remap, and an end-to-end draft/target engine win;
+- an end-to-end speculative draft/target performance win; tree/branch
+  metadata, stochastic residual-distribution rejection, and KV commit/remap
+  remain profile-gated after the real-engine verifier share measured below
+  `0.2%`;
 - FP8/INT8 KV-cache compression with measured cache bytes, quality, admitted
   context/batch, and TPOT;
 - prefix-cache/preemption KV movement and compaction in a real scheduler path;

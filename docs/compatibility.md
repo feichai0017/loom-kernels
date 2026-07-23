@@ -22,10 +22,14 @@ hook. This source result is recorded in the
 [speculative verifier evidence](results/h20-greedy-speculative-verify-20260723.json);
 it does not turn the older 192-test artifact into a new wheel.
 
-The 0.25.1 gate proves that the current adapters and CUDA paths execute against
-the official vLLM wheel. It does not retroactively transfer the 0.24
-model-level latency results to 0.25.1. A new engine benchmark is required before
-making a 0.25.1 performance claim.
+The process-isolated Qwen2.5 draft/target engine benchmark is qualified on
+vLLM 0.24 only; its [native-first](results/h20-vllm-qwen25-speculative-native-first-20260723.json)
+and [Loom-first](results/h20-vllm-qwen25-speculative-loom-first-20260723.json)
+reports prove invocation and provider equivalence, not acceleration. The
+0.25.1 gate proves that the current adapters and CUDA paths execute against the
+official vLLM wheel. It does not retroactively transfer any 0.24 model-level
+latency result to 0.25.1. A new engine benchmark is required before making a
+0.25.1 performance claim.
 
 Python package metadata therefore requires or accepts:
 

@@ -59,6 +59,14 @@ otherwise.
 | Boundary | Result set | Current conclusion |
 | --- | --- | --- |
 | Greedy verify + accepted/bonus compaction | [15-case H20 gate](h20-greedy-speculative-verify-20260723.json) | Bit-exact with vLLM 0.24 across batches 1-256 and draft lengths 1/4/8; `1.101-1.128x` operator-level ratio. The source suite also passes 202 tests on vLLM 0.24 and 0.25.1. No end-to-end model claim. |
+| Real draft/target engine gate | [native first](h20-vllm-qwen25-speculative-native-first-20260723.json) · [Loom first](h20-vllm-qwen25-speculative-loom-first-20260723.json) | Qwen2.5-1.5B target plus 0.5B draft on vLLM 0.24 preserves exact native/Loom tokens and draft statistics with `714/714` measured Loom calls in each order. Loom's verifier boundary is `1.026-1.133x` faster but only `0.048-0.200%` of batch latency; end-to-end native/Loom ratios cross parity and speculative decode is `3.18-4.97x` slower than target-only in these cases. |
+
+The target-only and speculative providers use different target-model execution
+shapes. At batch 32, both speculative providers follow the same deterministic
+trajectory while two of 32 target-only requests diverge after generated token
+51 or 53; batch 1 and 8 match fully. The reports retain those mismatches and
+make target-only equality informational. Exact native-vLLM versus Loom
+speculative output is the correctness gate.
 
 ## Paged-decode attention
 

@@ -46,6 +46,9 @@ spelling; Python package metadata uses the equivalent PEP 440 spelling.
 - deterministic greedy speculative verification and accepted/bonus-token
   compaction over vLLM-compatible flattened ragged metadata, with Rust/CUDA/
   PyTorch coverage, explicit vLLM 0.24/0.25 registration, and H20 evidence.
+- a process-isolated vLLM draft/target benchmark with exact native/Loom token
+  and acceptance gates, measured launch coverage, post-timing CUDA boundary
+  profiling, provider-order reversal, and pinned Qwen2.5 H20 evidence.
 
 ### Fixed
 

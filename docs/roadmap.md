@@ -27,10 +27,10 @@ feature. New feature work follows this order:
 
 | Order | Track | First deliverable | Required system proof |
 | --- | --- | --- | --- |
-| 1 | Speculative decoding support | deterministic greedy verify/compact is complete; tree metadata and stochastic rejection are next | a named draft/target model pair preserves output semantics and improves decode latency or throughput |
-| 2 | KV-cache compression | FP8 KV write/read boundary with explicit scale layout | lower cache bytes and higher admitted context or batch size without unacceptable quality or TPOT loss |
-| 3 | Complete sampling tail | fused penalties, top-k/top-p, renormalization, and deterministic RNG | seeded token parity or a declared statistical contract plus an order-reversed engine win |
-| 4 | KV-cache movement | block copy/gather/scatter/compact/remap for prefix reuse and preemption | fewer launches or less movement time in a real scheduler path |
+| 1 | KV-cache compression | FP8 KV write/read boundary with explicit scale layout | lower cache bytes and higher admitted context or batch size without unacceptable quality or TPOT loss |
+| 2 | Complete sampling tail | fused penalties, top-k/top-p, renormalization, and deterministic RNG | seeded token parity or a declared statistical contract plus an order-reversed engine win |
+| 3 | KV-cache movement | block copy/gather/scatter/compact/remap for prefix reuse and preemption | fewer launches or less movement time in a real scheduler path |
+| 4 | Profile-gated speculative extensions | tree/stochastic/KV boundaries only after profiling exposes material non-GEMM cost | a named draft/target model pair improves decode latency or throughput |
 | 5 | Quantization plumbing | scale, pack/unpack, dequant/requant, and layout transitions around vendor GEMM | one named quantized model removes an HBM pass or temporary tensor |
 | 6 | MoE routing and movement | top-k routing, histogram/prefix sum, permutation, and inverse permutation | lower model-level MoE latency while grouped GEMM remains vendor-owned |
 | 7 | Minimal Rust decode proof | zero-copy Rust orchestration over vendor-produced tensors and Loom operators | one deterministic decode step uses borrowed memory and stream ownership without becoming an inference engine |
@@ -221,13 +221,27 @@ sampling requests with `logprobs=0`; owning the selection kernels remains open.
 
 ## K4.5: Speculative Decoding Support
 
-Status: in progress.
+Status: real-engine path complete; performance exit open and further extensions
+are profile-gated.
 
 - ~~verify flattened ragged greedy drafts and compact accepted/bonus tokens~~ —
   Rust contract and CPU oracle, one-warp handwritten CUDA, safe borrowed-Rust
   dispatch, PyTorch current-stream/compile/graph coverage, and explicit vLLM
   0.24/0.25 registration are complete; all 15 H20 benchmark shapes are
   bit-exact and reduce verifier-level latency by `9.2-11.3%`;
+- ~~run a named draft/target model through isolated native and Loom
+  providers~~ — Qwen2.5-1.5B target plus Qwen2.5-0.5B draft on vLLM 0.24
+  preserves exact native/Loom speculative tokens and statistics, records
+  `714/714` measured Loom calls per order, and isolates target/native/Loom in
+  separate processes;
+- profile result: the verifier is only `0.048-0.200%` of batch latency,
+  native/Loom end-to-end ratios cross parity under order reversal, and this
+  speculative configuration is `3.18-4.97x` slower than target-only. Do not
+  spend the next milestone on verifier micro-optimization;
+
+The remaining speculative boundaries require a new named workload that shows
+material metadata, sampling, or KV-management cost:
+
 - construct batched draft-verification metadata and tree/branch masks consumed
   by an engine-selected attention backend;
 - implement stochastic residual-distribution acceptance/rejection using an
@@ -241,7 +255,8 @@ Exit: one named draft/target model pair reaches Loom from a real engine,
 preserves the engine's declared sampling distribution and seeded behavior,
 records path hits, and improves end-to-end decode latency or throughput in both
 provider orders. A standalone acceptance-kernel benchmark does not close this
-milestone.
+milestone. The current Qwen2.5 gate closes invocation and equivalence, but
+explicitly does not close the performance clause.
 
 ## K5: MoE Routing And Movement
 

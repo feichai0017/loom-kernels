@@ -50,7 +50,7 @@ core; it will not implement a competing GEMM.
 | MLP | split-half SiLU-and-Mul · SiLU-and-Mul→block FP8 | F32, FP16, BF16; opt-in vLLM activation paths |
 | Position and KV | NeoX/interleaved RoPE + paged-KV write | packed QKV, NHD/HND cache views, current-stream PyTorch |
 | Decode tail | greedy + sampled logprob · selected-token logprob + rank · Min-P | exact-token/rank gates and measured vLLM fallbacks |
-| Speculative decode | greedy draft verify + accepted/bonus-token compaction | flattened ragged int32 metadata, exact vLLM 0.24/0.25 rejection semantics |
+| Speculative decode | greedy draft verify + accepted/bonus-token compaction | flattened ragged int32 metadata, exact vLLM 0.24/0.25 rejection semantics, real vLLM 0.24 draft/target invocation |
 | Attention | paged MQA/GQA decode · local split-K/LSE merge | native paged KV, GQA reuse, short shape-gated vLLM route |
 
 The [operator catalog](docs/operator-catalog.md) separates `supported`, `next`,
@@ -63,15 +63,20 @@ K0.7's first native-wheel engineering gate is complete for Linux x86_64,
 CUDA 13.1, SM90, Python 3.11, PyTorch 2.10/2.11, and vLLM 0.24/0.25. The
 artifact is qualified but not published to a package index. The first
 post-K0.7 slice is also complete: deterministic greedy speculative
-verification and token compaction now follow the same Rust-owned path. The
-ordered feature program is:
+verification and token compaction now follow the same Rust-owned path, and a
+process-isolated Qwen2.5-1.5B/0.5B vLLM 0.24 gate proves exact native/Loom
+speculative output with complete measured path coverage. That gate also shows
+that the verifier is only `0.048-0.200%` of batch latency and that speculative
+decode is `3.18-4.97x` slower than target-only for this workload. Further
+speculative expansion is therefore profile-gated. The ordered feature program
+is now:
 
 | Order | Direction | First proof |
 | --- | --- | --- |
-| 1 | Finish speculative decoding support | tree/branch metadata, stochastic rejection with explicit RNG, KV commit/remap, and a real draft/target engine win |
-| 2 | FP8 KV-cache compression | lower cache bytes and a larger admitted context or batch size with quality and TPOT reported |
-| 3 | Complete sampling tail | penalties, top-k/top-p, deterministic RNG, and top-k logprobs through one engine path |
-| 4 | KV-cache movement and quantization plumbing | measured prefix/preemption movement plus scale/pack/layout work around unchanged vendor GEMM |
+| 1 | FP8 KV-cache compression | lower cache bytes and a larger admitted context or batch size with quality and TPOT reported |
+| 2 | Complete sampling tail | penalties, top-k/top-p, deterministic RNG, and top-k logprobs through one engine path |
+| 3 | KV-cache movement and quantization plumbing | measured prefix/preemption movement plus scale/pack/layout work around unchanged vendor GEMM |
+| 4 | Profile-gated speculative extensions | tree/stochastic/KV work only after a named workload exposes a material non-GEMM boundary |
 | 5 | MoE routing and movement | routing, histogram/prefix sum, permutation, and combine around vendor grouped GEMM |
 | 6 | Minimal Rust decode proof | one zero-copy decode step over borrowed tensors and streams, without becoming an inference engine |
 
@@ -189,7 +194,8 @@ opens the raw JSON artifact used for the claim.
 | [Greedy + sampled logprob](docs/results/h20-greedy-sample-logprobs-20260722.json) | `3.16–4.35×` operator ratio; `1.129–1.250×` real-engine batch-latency ratio | Pure greedy requests with raw `logprobs=0` |
 | [Selected-token logprob + rank](docs/results/h20-selected-token-logprobs-20260722.json) | `2.77–3.78×` operator ratio; `1.044–1.125×` real-engine batch-latency ratio | vLLM still owns top-k/top-p, RNG, and selection |
 | [Min-P filtering](docs/results/h20-min-p-filter-20260722.json) | `1.885×` at 128 rows and no tensor-sized probability/mask temporaries | Smaller batches fall back to vLLM |
-| [Greedy speculative verify + compact](docs/results/h20-greedy-speculative-verify-20260723.json) | `1.101–1.128×` dispatcher ratio across 15 batch/draft shapes; bit-exact with vLLM | Deterministic all-greedy rejection only; no model-level speedup claim |
+| [Greedy speculative verify + compact](docs/results/h20-greedy-speculative-verify-20260723.json) | `1.101–1.128×` dispatcher ratio across 15 batch/draft shapes; bit-exact with vLLM | Deterministic all-greedy rejection only; the real-model gate is the next row |
+| Real-model speculative decode: [native first](docs/results/h20-vllm-qwen25-speculative-native-first-20260723.json) · [Loom first](docs/results/h20-vllm-qwen25-speculative-loom-first-20260723.json) | Exact native/Loom tokens, `714/714` measured Loom calls per order; verifier share `0.048–0.200%` | Engine path proven; native/Loom latency crosses parity and speculative decode loses to target-only on this model pair |
 | [RoPE + paged-KV write](docs/results/h20-rope-paged-kv-20260722.json) | `2.30–2.40×` dispatcher ratio for 1–512 tokens | Real-engine invocation is proven; end-to-end remains at parity |
 | [Short paged decode](docs/results/h20-vllm-paged-decode-backend-20260722.json) | `1.154–2.374×` across all 24 admitted backend cases | FP16/BF16, Hq/Hkv 32/8, D128, context ≤32; other shapes use FA3 |
 | [Local split-K paged decode](docs/results/h20-paged-decode-split-k-20260722.json) | `1.14–6.22×` versus legacy Loom | Improves the Rust/CUDA backend; FA3 remains the long-context engine fallback |

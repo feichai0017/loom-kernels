@@ -78,19 +78,24 @@ export const supportedOperators = [
 
 export const nextOperators = [
   {
-    milestone: "K4.5 · P0",
-    name: "Finish speculative decoding",
-    reason: "Add tree metadata, stochastic residual rejection, KV commit/remap, and a real draft/target engine gate.",
-  },
-  {
     milestone: "K3 · P0",
-    name: "KV-cache compression + movement",
-    reason: "Add FP8 cache scales and scheduler-facing block movement that improve admitted context, batch size, or prefix/preemption cost.",
+    name: "FP8 KV-cache compression",
+    reason: "Reduce cache bytes and improve admitted context or batch size with quality and TPOT reported together.",
   },
   {
     milestone: "K4 · P0",
     name: "Complete sampling tail",
     reason: "Own penalties, top-k/top-p, deterministic RNG, and top-k logprobs without host round trips.",
+  },
+  {
+    milestone: "K3 · P0",
+    name: "KV-cache movement",
+    reason: "Measure scheduler-facing block copy, gather, scatter, and compact work for prefix reuse and preemption.",
+  },
+  {
+    milestone: "K4.5 · Gated",
+    name: "Speculative extensions",
+    reason: "Add tree, stochastic, or KV metadata only when a named profile exposes material non-GEMM cost.",
   },
   {
     milestone: "K2.5 · P1",
@@ -174,6 +179,12 @@ export const evidence = [
     operator: "Greedy speculative verify",
     shape: "H20 · batch 1–256 · draft length 1 / 4 / 8",
     result: "1.101–1.128×",
-    detail: "Bit-exact verifier-level ratio vs vLLM 0.24; no model-level claim",
+    detail: "Bit-exact verifier-level ratio vs vLLM 0.24",
+  },
+  {
+    operator: "Real-model speculative decode",
+    shape: "Qwen2.5 1.5B target + 0.5B draft · batch 1 / 8 / 32",
+    result: "0.048–0.200%",
+    detail: "Verifier share of batch latency; exact native/Loom path, no end-to-end win",
   },
 ];
