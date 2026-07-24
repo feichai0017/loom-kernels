@@ -58,16 +58,15 @@ input = RMSNorm(residual, weight, epsilon)
 
 ## Compatibility
 
-The supported package interval is `vllm>=0.24,<0.26`. The qualified native
-wheel passes 192 H20 tests with each minor. The subsequent greedy speculative
-revision passed an expanded 202-test suite on both official vLLM 0.24.0 and
-0.25.1 packages. The current source additionally adds FP8 KV quantize-on-write;
-its new H20 matrix is still open and it is not a published native wheel.
+The supported package interval is `vllm>=0.24,<0.26`. The current bridge-ABI-2
+native wheel passes 225 H20 tests with each official vLLM minor and includes
+greedy speculative verification plus static FP8 KV quantize-on-write. It is
+qualified but not published.
 Existing model-level performance artifacts were captured on 0.24.0 and are
 not automatically performance claims for 0.25.1.
 See the
 [compatibility matrix](../compatibility.md) and
-[native-wheel gate](../results/h20-native-wheel-clean-install-20260723.json).
+[native-wheel gate](../results/h20-native-wheel-clean-install-abi2-20260724.json).
 
 ## Build and install
 
@@ -536,10 +535,13 @@ integration plus operator-level benefit, not model-level acceleration. See the
 [operator report](../results/h20-rope-paged-kv-20260722.json),
 [large-token sweep](../results/h20-rope-paged-kv-large-20260722.json), and
 [engine report](../results/h20-vllm-qwen25-rope-paged-kv-engine-20260722.json).
-Those artifacts cover native caches only. The static FP8 E4M3 source path
-reuses the same operator and vLLM compiler pass, but has no accepted H20 result
-yet; its exact-byte, clean-wheel, quality, cache-capacity, and TPOT gates remain
-open. See the [FP8 KV-cache contract](../design/fp8-kv-cache.md).
+Those artifacts cover native caches only. The
+[static FP8 E4M3 result](../results/h20-fp8-kv-cache-write-20260724.json)
+separately qualifies exact cache bytes, the ABI2 clean wheel, a
+`1.317-1.378x` named-operator range, and exact tokens plus Loom path hits in
+both engine orders. Its latency ratios are order-sensitive, and the
+native-versus-FP8 quality, admitted-capacity, TTFT, and TPOT gate remains open.
+See the [FP8 KV-cache contract](../design/fp8-kv-cache.md).
 
 For paged decode, the native-interleaved
 [156-case shape sweep](../results/h20-paged-decode-interleaved-shape-sweep-20260722.json)

@@ -1,0 +1,184 @@
+{
+  "schema_version": 1,
+  "date": "2026-07-24",
+  "purpose": "ABI-2 native Python matrix wheel and repository-free H20 clean-install gate",
+  "tested_revision": "a2f37666ed31aa8781a26e150980a75f9f569171",
+  "hardware": {
+    "gpu": "NVIDIA H20",
+    "compute_capability": "sm_90",
+    "driver": "535.161.08",
+    "architecture": "x86_64",
+    "glibc": "2.36"
+  },
+  "build_environment": {
+    "python": "3.11.2",
+    "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+    "cuda_toolkit": "13.1 (compiler build 37061995)",
+    "torch": "2.11.0+cu130",
+    "setuptools": "80.10.2",
+    "wheel": "0.47.0",
+    "build": "1.5.0",
+    "clean_git_checkout": true
+  },
+  "artifact": {
+    "filename": "loom_kernels-1.0.0a1-2cu131torch210sm90-py3-none-linux_x86_64.whl",
+    "size_bytes": 2785356,
+    "sha256": "b864f6d7ffd90f8fc0009a19a01418a3d3098033421429ec94da6a1185532540",
+    "published": false,
+    "wheel_metadata": {
+      "root_is_purelib": false,
+      "build_tag": "2cu131torch210sm90",
+      "python_tag": "py3",
+      "abi_tag": "none",
+      "platform_tag": "linux_x86_64"
+    },
+    "runtime_metadata": {
+      "python": ">=3.10",
+      "torch": ">=2.10,<2.12",
+      "vllm_extra": ">=0.24,<0.26"
+    },
+    "native_payload": [
+      {
+        "path": "loom_kernels/lib/libloom_cuda_bridge.so",
+        "sha256": "f1020ff2157ebbe02c5bd21a25f06bb78eac5a4e086b58296a8c4573a098ccad"
+      },
+      {
+        "path": "loom_kernels/lib/libloom_kernels_torch.so",
+        "sha256": "283c9073715501ab3d94ba89f9dce03dfff8e7529d7aa0c2e09c72744bca05ba"
+      }
+    ],
+    "manifest": {
+      "revision": "a2f37666ed31aa8781a26e150980a75f9f569171",
+      "cuda_toolkit": "13.1",
+      "cuda_architectures": [
+        "sm_90"
+      ],
+      "torch_build": "2.11.0+cu130",
+      "torch_stable_abi_target": "2.10",
+      "bridge_abi_version": 2
+    }
+  },
+  "binary_audit": {
+    "shared_library_count": 2,
+    "dispatcher_runpath": "$ORIGIN:$ORIGIN/..",
+    "dispatcher_needed": [
+      "libloom_cuda_bridge.so",
+      "libtorch_cuda.so",
+      "libc10.so",
+      "libtorch_cpu.so",
+      "libstdc++.so.6",
+      "libgcc_s.so.1",
+      "libc.so.6"
+    ],
+    "bridge_needed": [
+      "libstdc++.so.6",
+      "libgcc_s.so.1",
+      "libc.so.6",
+      "ld-linux-x86-64.so.2"
+    ],
+    "undefined_aten_or_c10_cpp_symbols": 0,
+    "undefined_raw_cuda_launch_symbols": 0,
+    "auditwheel": {
+      "version": "6.7.0",
+      "artifact_tag": "linux_x86_64",
+      "detected_manylinux_floor": "manylinux_2_34_x86_64",
+      "decision": "retain the conservative linux_x86_64 tag; no broader manylinux claim"
+    }
+  },
+  "runtime_matrix": [
+    {
+      "python": "3.11.2",
+      "torch": "2.11.0+cu130",
+      "torch_cuda": "13.0",
+      "vllm": "0.24.0",
+      "fresh_venv": true,
+      "system_site_packages": false,
+      "pip_check": "passed",
+      "package_and_libraries_loaded_from_venv": true,
+      "environment_overrides_absent": [
+        "PYTHONPATH",
+        "LD_LIBRARY_PATH",
+        "LOOM_KERNELS_TORCH_LIBRARY"
+      ],
+      "installed_library_hashes_match_manifest": true,
+      "bridge_abi_version": 2,
+      "python_gpu_suite": {
+        "passed": 225,
+        "failed": 0,
+        "duration_seconds": 9.15
+      }
+    },
+    {
+      "python": "3.11.2",
+      "torch": "2.11.0+cu130",
+      "torch_cuda": "13.0",
+      "vllm": "0.25.1",
+      "vllm_wheel_sha256": "16fc7a28df1576eb6f7ca0455026551b8f9adb674c19c66059359ef3e964bd1e",
+      "torchcodec": "0.14.0",
+      "torchcodec_wheel_sha256": "8dd63d5e5f7696b560619952a215a0b9565248a71c42cbea74b2a85282e8b841",
+      "dependency_source_note": "The official vLLM wheel requires torchcodec>=0.14; torchcodec 0.14.0 was installed from official PyPI because the internal mirror ended below that floor.",
+      "fresh_venv": true,
+      "system_site_packages": false,
+      "pip_check": "passed",
+      "package_and_libraries_loaded_from_venv": true,
+      "environment_overrides_absent": [
+        "PYTHONPATH",
+        "LD_LIBRARY_PATH",
+        "LOOM_KERNELS_TORCH_LIBRARY"
+      ],
+      "installed_library_hashes_match_manifest": true,
+      "bridge_abi_version": 2,
+      "python_gpu_suite": {
+        "passed": 225,
+        "failed": 0,
+        "duration_seconds": 8.39
+      }
+    },
+    {
+      "python": "3.11.2",
+      "torch": "2.10.0+cu128",
+      "torch_cuda": "12.8",
+      "vllm": null,
+      "fresh_venv": true,
+      "system_site_packages": false,
+      "pip_check": "passed",
+      "package_and_libraries_loaded_from_venv": true,
+      "environment_overrides_absent": [
+        "PYTHONPATH",
+        "LD_LIBRARY_PATH",
+        "LOOM_KERNELS_TORCH_LIBRARY"
+      ],
+      "installed_library_hashes_match_manifest": true,
+      "bridge_abi_version": 2,
+      "python_gpu_suite": {
+        "passed": 138,
+        "failed": 0,
+        "skipped": 63,
+        "duration_seconds": 4.84,
+        "scope_note": "This environment intentionally contains no vLLM; vLLM-dependent cases are skipped."
+      }
+    }
+  ],
+  "commands": [
+    "CUDA_HOME=/usr/local/cuda-13.1 LOOM_CUDA_ARCHS=90 python python/build_wheel.py --cuda-home /usr/local/cuda-13.1 --archs 90 --wheel-dir dist",
+    "auditwheel show dist/loom_kernels-1.0.0a1-2cu131torch210sm90-py3-none-linux_x86_64.whl",
+    "python3 -m venv clean-vllm024 && clean-vllm024/bin/pip install 'dist/loom_kernels-1.0.0a1-2cu131torch210sm90-py3-none-linux_x86_64.whl[vllm,test]' 'vllm==0.24.0'",
+    "python3 -m venv clean-vllm025 && clean-vllm025/bin/pip install 'dist/loom_kernels-1.0.0a1-2cu131torch210sm90-py3-none-linux_x86_64.whl[vllm,test]' torchcodec-0.14.0-cp311-cp311-manylinux_2_28_x86_64.whl vllm-0.25.1-cp38-abi3-manylinux_2_28_x86_64.whl",
+    "python3 -m venv clean-torch210 && clean-torch210/bin/pip install 'dist/loom_kernels-1.0.0a1-2cu131torch210sm90-py3-none-linux_x86_64.whl[test]' 'torch==2.10.0'",
+    "env -u PYTHONPATH -u LD_LIBRARY_PATH -u LOOM_KERNELS_TORCH_LIBRARY <clean-python> -m pip check",
+    "env -u PYTHONPATH -u LD_LIBRARY_PATH -u LOOM_KERNELS_TORCH_LIBRARY <clean-python> -m pytest -q -p no:cacheprovider python/tests"
+  ],
+  "decision": {
+    "accepted": true,
+    "k0_7_engineering_gate": "complete for bridge ABI 2 on the CUDA 13.1, SM90, Linux x86_64 matrix row",
+    "claim": "One Python-ABI-independent wheel containing exactly the checked Rust CUDA bridge and boxed Stable ABI dispatcher installs without a repository checkout and passes the qualified PyTorch 2.10/2.11 plus vLLM 0.24/0.25 H20 gates.",
+    "not_claimed": [
+      "a published native Python wheel",
+      "H20 runtime validation on Python versions other than 3.11",
+      "GPU architectures other than sm_90",
+      "a manylinux compatibility floor earlier than 2.34",
+      "compatibility outside PyTorch 2.10/2.11 or vLLM 0.24/0.25",
+      "serving or model-level performance"
+    ]
+  }
+}

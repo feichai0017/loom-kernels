@@ -24,7 +24,8 @@ otherwise.
 
 | Boundary | Result set | Current conclusion |
 | --- | --- | --- |
-| Native Python matrix wheel | [clean-install H20 gate](h20-native-wheel-clean-install-20260723.json) | One exact `py3-none-linux_x86_64` wheel contains the two Loom `.so` files and passes fresh-venv gates on PyTorch 2.10/2.11 plus vLLM 0.24/0.25. It is not published. |
+| Native Python ABI2 matrix wheel | [current clean-install H20 gate](h20-native-wheel-clean-install-abi2-20260724.json) | One exact `py3-none-linux_x86_64` wheel contains the two Loom `.so` files and passes 225 tests with each vLLM minor plus 138 applicable tests on PyTorch 2.10. It is not published. |
+| Historical ABI1 matrix wheel | [predecessor clean-install H20 gate](h20-native-wheel-clean-install-20260723.json) | Preserved as the earlier 192/123-test artifact; ABI 2 is the current wheel boundary. |
 | LibTorch Stable ABI across PyTorch minors | [two-minor H20 binary gate](h20-libtorch-stable-abi-20260723.json) | The source-built predecessor established the PyTorch 2.10 Stable ABI target and same-binary 2.10/2.11 boundary; the packaged clean-install result is the row above. |
 | Pre-Stable-ABI single Rust bridge | [breaking-change H20 gate](h20-single-rust-bridge-compatibility-20260723.json) | Historical revision `cb5feaf` first proved all ten framework families on the Rust-owned path and passed 191 tests on each vLLM minor. The current dispatcher result is the row above. |
 | Historical partial-bridge baseline | [pre-unification 0.24/0.25 gate](h20-vllm-compatibility-rust-bridge-20260723.json) | Preserved as historical evidence for revision `3ae4210`; its raw-ABI routing description does not apply to the current architecture. |
@@ -45,6 +46,7 @@ otherwise.
 | --- | --- |
 | [Decode-sized operator sweep](h20-rope-paged-kv-20260722.json) · [large-token sweep](h20-rope-paged-kv-large-20260722.json) | Fusion wins most strongly at decode-sized token counts and narrows with larger batches |
 | [Baseline-first engine gate](h20-vllm-qwen25-rope-paged-kv-engine-20260722.json) · [Loom-first engine gate](h20-vllm-qwen25-rope-paged-kv-engine-loom-first-20260722.json) | Exact tokens and Loom path hits are proven; order reversal crosses parity, so no model-level speedup is claimed |
+| [Static FP8 E4M3 cache-write gate](h20-fp8-kv-cache-write-20260724.json) | Exact vLLM cache bytes, framework/clean-wheel coverage, `2x` BF16-to-FP8 physical storage ratio, and `1.317-1.378x` operator ratios are qualified. Both engine orders preserve tokens and hit Loom; latency is order-sensitive, so the native-vs-FP8 quality/capacity/serving gate remains open. |
 
 ## Sampling and log probabilities
 

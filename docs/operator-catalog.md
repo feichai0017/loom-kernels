@@ -59,7 +59,7 @@ isolated microbenchmark is not sufficient.
 | RoPE+paged-KV write | P0 | supported | position encoding without materializing another K pass |
 | paged-KV reshape/store/append | P0 | next | engine tensor to cache layout |
 | KV block copy, swap, gather, scatter, compact, and remap | P0 | next | prefix reuse, preemption, beam movement, and cache compaction |
-| RoPE+paged-KV write to static FP8 E4M3 | P0 | in progress | one fused position, per-tensor/per-head quantize, and paged-write pass; H20 qualification remains open |
+| RoPE+paged-KV write to static FP8 E4M3 | P0 | in progress | implementation, exact-byte, clean-wheel, operator, and engine-invocation gates pass; native-vs-FP8 quality/capacity/serving value remains open |
 | dynamic FP8 per-token-head scale/write | P1 | planned | separate engine scale-cache contract only when a named backend requires it |
 | INT8 KV quantize/dequantize with scale update | P1 | planned | admitted only by a named engine/model cache contract |
 | embedding gather and parallel-vocabulary embedding | P1 | profile-gated | lookup plus dtype/layout conversion |

@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "date": "2026-07-24",
+  "purpose": "static FP8 E4M3 quantize-on-write qualification for fused RoPE and paged KV cache",
+  "tested_revision": "a2f37666ed31aa8781a26e150980a75f9f569171",
+  "hardware": {
+    "gpu": "NVIDIA H20",
+    "compute_capability": "sm_90",
+    "driver": "535.161.08"
+  },
+  "software": {
+    "python": "3.11.2",
+    "torch": "2.11.0+cu130",
+    "torch_cuda": "13.0",
+    "vllm": "0.24.0",
+    "bridge_abi_version": 2,
+    "wheel_sha256": "b864f6d7ffd90f8fc0009a19a01418a3d3098033421429ec94da6a1185532540"
+  },
+  "correctness": {
+    "exact_fp8_byte_cases": {
+      "count": 16,
+      "source_dtypes": [
+        "fp16",
+        "bf16"
+      ],
+      "scale_modes": [
+        "per-tensor",
+        "per-head"
+      ],
+      "cache_layouts": [
+        "NHD",
+        "HND"
+      ],
+      "rope_styles": [
+        "NeoX",
+        "interleaved"
+      ],
+      "baseline": "vLLM _C.rotary_embedding plus _C_cache_ops.reshape_and_cache_flash",
+      "cache_comparison": "bit-exact packed allocation, including untouched padding and skipped negative slots",
+      "passed": true
+    },
+    "framework_contracts": {
+      "current_external_stream": "passed",
+      "fake_tensor_and_schema": "passed",
+      "torch_compile_fullgraph": "passed on PyTorch 2.10 and 2.11",
+      "cuda_graph_capture_and_replay": "passed",
+      "packed_qkv_and_short_slot_mapping": "passed",
+      "packed_cache_non_overlap_validation": "passed",
+      "bridge_launch_telemetry": "passed"
+    },
+    "clean_install_matrix": "h20-native-wheel-clean-install-abi2-20260724.json"
+  },
+  "storage": {
+    "source_dtype": "bf16",
+    "cache_dtype": "FP8 E4M3 stored as uint8",
+    "native_over_fp8_bytes": 2.0,
+    "scope": "physical K/V cache allocations in the operator sweep; not a full-engine peak-memory measurement"
+  },
+  "operator_benchmark": {
+    "baseline": "vLLM _C.rotary_embedding plus _C_cache_ops.reshape_and_cache_flash",
+    "candidate": "one Loom rope_paged_kv_write_ submission",
+    "dtype": "bf16",
+    "cache_dtype": "fp8",
+    "query_heads": 14,
+    "kv_heads": 2,
+    "head_size": 64,
+    "block_size": 16,
+    "tokens": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      32,
+      64,
+      128
+    ],
+    "layouts": [
+      "NHD",
+      "HND"
+    ],
+    "warmup": 100,
+    "iterations": 1000,
+    "repeats": 5,
+    "per_tensor_scale": {
+      "cases": 16,
+      "all_cases_faster": true,
+      "speedup_minimum": 1.3530267975449919,
+      "speedup_median": 1.3676651718121555,
+      "speedup_maximum": 1.3775230247203574
+    },
+    "per_head_scale": {
+      "cases": 16,
+      "all_cases_faster": true,
+      "speedup_minimum": 1.317237720455374,
+      "speedup_median": 1.3417468820840512,
+      "speedup_maximum": 1.3551970415755599
+    }
+  },
+  "engine_benchmark": {
+    "model": "Qwen2.5-0.5B-Instruct",
+    "model_safetensors_sha256": "fdf756fa7fcbe7404d5c60e26bff1a0c8b8aa1f72ced49e7dd0210fe288fb7fe",
+    "dtype": "bf16",
+    "kv_cache_dtype": "fp8",
+    "baseline_contract": "Both providers keep vLLM rotary_embedding and static quant_fp8 opaque; only Loom enables the official RoPE plus KV fusion pass. This isolates the fusion mechanism and is not a default-vLLM serving comparison.",
+    "cases": [
+      "batch 1, input 32, output 64",
+      "batch 8, input 32, output 64",
+      "batch 32, input 32, output 32"
+    ],
+    "warmup_requests_per_case": 2,
+    "measured_repeats_per_case": 7,
+    "baseline_first": {
+      "accepted": true,
+      "token_ids_match": true,
+      "baseline_host_launch_count": 0,
+      "loom_host_launch_count": 864,
+      "baseline_over_loom_batch_latency": [
+        1.153746992133628,
+        1.6016234112078134,
+        1.0579919267045608
+      ]
+    },
+    "loom_first": {
+      "accepted": true,
+      "token_ids_match": true,
+      "baseline_host_launch_count": 0,
+      "loom_host_launch_count": 864,
+      "baseline_over_loom_batch_latency": [
+        1.0267780740617904,
+        1.004925233805882,
+        1.0018537959196305
+      ]
+    },
+    "decision": "Exact tokens and real Loom path hits are proven in both orders. The latency ratios are order-sensitive, so no stable model-level speedup is claimed."
+  },
+  "qualification_gates": [
+    {
+      "gate": 1,
+      "name": "exact FP8 bytes versus vLLM",
+      "status": "passed"
+    },
+    {
+      "gate": 2,
+      "name": "stream, FakeTensor, compile, graph, and telemetry",
+      "status": "passed"
+    },
+    {
+      "gate": 3,
+      "name": "operator comparison against separate vLLM RoPE and cache write",
+      "status": "passed"
+    },
+    {
+      "gate": 4,
+      "name": "clean-install wheels on vLLM 0.24 and 0.25",
+      "status": "passed"
+    },
+    {
+      "gate": 5,
+      "name": "pretrained native-versus-FP8 quality, admitted capacity, TTFT, and TPOT",
+      "status": "open"
+    }
+  ],
+  "decision": {
+    "accepted_boundary": "source, wheel, exact-byte, operator, and engine-invocation qualification",
+    "claim": "Loom emits vLLM-compatible static FP8 E4M3 cache bytes through one checked Rust/CUDA fused RoPE plus paged-write operator, halves BF16 cache storage at this boundary, and is faster than the named two-op baseline across the measured operator sweep.",
+    "not_claimed": [
+      "a stable pretrained-model latency or throughput improvement",
+      "native-versus-FP8 generation quality",
+      "a larger admitted context length or batch size in a real engine",
+      "TTFT or TPOT improvement under serving load",
+      "dynamic scaling, INT8, FP8 E5M2, NVFP4, or cache dequantization"
+    ],
+    "next_gate": "run a pretrained native-versus-FP8 capacity and quality study before calling FP8 KV compression system-complete"
+  }
+}

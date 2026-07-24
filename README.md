@@ -48,7 +48,7 @@ core; it will not implement a competing GEMM.
 | --- | --- | --- |
 | Normalization | RMSNorm · Add+RMSNorm · RMSNorm→dynamic FP8 | F32, FP16, BF16; PyTorch and vLLM IR coverage |
 | MLP | split-half SiLU-and-Mul · SiLU-and-Mul→block FP8 | F32, FP16, BF16; opt-in vLLM activation paths |
-| Position and KV | NeoX/interleaved RoPE + native paged-KV write | packed QKV, NHD/HND cache views, current-stream PyTorch |
+| Position and KV | NeoX/interleaved RoPE + native/static-FP8 paged-KV write | packed QKV, NHD/HND cache views, static per-tensor/per-head FP8 E4M3 scales, current-stream PyTorch |
 | Decode tail | greedy + sampled logprob · selected-token logprob + rank · Min-P | exact-token/rank gates and measured vLLM fallbacks |
 | Speculative decode | greedy draft verify + accepted/bonus-token compaction | flattened ragged int32 metadata, exact vLLM 0.24/0.25 rejection semantics, real vLLM 0.24 draft/target invocation |
 | Attention | paged MQA/GQA decode · local split-K/LSE merge | native paged KV, GQA reuse, short shape-gated vLLM route |
@@ -59,9 +59,10 @@ Catalog membership alone is never a performance claim.
 
 ## Next value program
 
-K0.7's first native-wheel engineering gate is complete for Linux x86_64,
-CUDA 13.1, SM90, Python 3.11, PyTorch 2.10/2.11, and vLLM 0.24/0.25. The
-artifact is qualified but not published to a package index. The first
+K0.7's current bridge-ABI-2 native-wheel engineering gate is complete for
+Linux x86_64, CUDA 13.1, SM90, Python 3.11, PyTorch 2.10/2.11, and vLLM
+0.24/0.25. The exact artifact is qualified but not published to a package
+index. The first
 post-K0.7 slice is also complete: deterministic greedy speculative
 verification and token compaction now follow the same Rust-owned path, and a
 process-isolated Qwen2.5-1.5B/0.5B vLLM 0.24 gate proves exact native/Loom
@@ -80,11 +81,16 @@ is now:
 | 5 | MoE routing and movement | routing, histogram/prefix sum, permutation, and combine around vendor grouped GEMM |
 | 6 | Minimal Rust decode proof | one zero-copy decode step over borrowed tensors and streams, without becoming an inference engine |
 
-The first K3 source slice now extends the same fused RoPE+paged-KV operator to
-write vLLM-compatible FP8 E4M3 cache bytes with static per-tensor or per-head
-scales. Its Rust, CUDA, bridge, PyTorch, and vLLM paths are implemented, but it
-remains `in progress` until the H20 exact-byte, wheel, engine-quality, memory,
-and TPOT gates are recorded. See the
+The first K3 slice extends the same fused RoPE+paged-KV operator to write
+vLLM-compatible FP8 E4M3 cache bytes with static per-tensor or per-head scales.
+One exact bridge-ABI-2 wheel now closes the H20 exact-byte, current-stream,
+compile/graph, named-operator, clean-install, and real-engine invocation gates.
+The physical cache allocation is `2x` smaller than BF16 at this operator
+boundary, and the fused path is `1.317-1.378x` faster than vLLM's separate RoPE
+and cache-write submissions across the measured sweep. It remains `in progress`
+because the pretrained native-versus-FP8 quality, admitted-capacity, TTFT, and
+TPOT gate is still open; order-reversed engine latency does not support a
+stable model-level speedup claim. See the
 [FP8 KV-cache design](docs/design/fp8-kv-cache.md).
 
 The detailed contracts and exit criteria live in the
@@ -204,10 +210,11 @@ opens the raw JSON artifact used for the claim.
 | [Greedy speculative verify + compact](docs/results/h20-greedy-speculative-verify-20260723.json) | `1.101–1.128×` dispatcher ratio across 15 batch/draft shapes; bit-exact with vLLM | Deterministic all-greedy rejection only; the real-model gate is the next row |
 | Real-model speculative decode: [native first](docs/results/h20-vllm-qwen25-speculative-native-first-20260723.json) · [Loom first](docs/results/h20-vllm-qwen25-speculative-loom-first-20260723.json) | Exact native/Loom tokens, `714/714` measured Loom calls per order; verifier share `0.048–0.200%` | Engine path proven; native/Loom latency crosses parity and speculative decode loses to target-only on this model pair |
 | [RoPE + paged-KV write](docs/results/h20-rope-paged-kv-20260722.json) | `2.30–2.40×` dispatcher ratio for 1–512 tokens | Real-engine invocation is proven; end-to-end remains at parity |
+| [Static FP8 KV-cache write](docs/results/h20-fp8-kv-cache-write-20260724.json) | Exact vLLM E4M3 bytes; `2×` BF16-to-FP8 cache storage ratio; `1.317–1.378×` operator ratio | Clean-wheel and real-engine invocation proven; native-vs-FP8 quality/capacity/serving gate remains open |
 | [Short paged decode](docs/results/h20-vllm-paged-decode-backend-20260722.json) | `1.154–2.374×` across all 24 admitted backend cases | FP16/BF16, Hq/Hkv 32/8, D128, context ≤32; other shapes use FA3 |
 | [Local split-K paged decode](docs/results/h20-paged-decode-split-k-20260722.json) | `1.14–6.22×` versus legacy Loom | Improves the Rust/CUDA backend; FA3 remains the long-context engine fallback |
-| [LibTorch Stable ABI dispatcher](docs/results/h20-libtorch-stable-abi-20260723.json) | Same `.so`: 192 tests on PyTorch 2.11 with each vLLM minor; 123 applicable tests on PyTorch 2.10 | Binary compatibility result only; native wheels and broader PyTorch versions remain unclaimed |
-| [Native matrix wheel](docs/results/h20-native-wheel-clean-install-20260723.json) | Same wheel: 192 tests with each vLLM minor; 123 applicable tests on PyTorch 2.10 | Linux x86_64, CUDA 13.1, SM90, Python 3.11; artifact is not published |
+| [LibTorch Stable ABI dispatcher](docs/results/h20-libtorch-stable-abi-20260723.json) | Same `.so`: 192 tests on PyTorch 2.11 with each vLLM minor; 123 applicable tests on PyTorch 2.10 | Historical source-built binary gate; the current packaged boundary is the next row |
+| [Native ABI2 matrix wheel](docs/results/h20-native-wheel-clean-install-abi2-20260724.json) | Same wheel: 225 tests with each vLLM minor; 138 applicable tests on PyTorch 2.10 | Linux x86_64, CUDA 13.1, SM90, Python 3.11; exact artifact is qualified but not published |
 
 > [!NOTE]
 > A fast kernel is not automatically a faster model. Loom records operator,
@@ -238,7 +245,7 @@ opens the raw JSON artifact used for the claim.
 | [Operator-library design](docs/design/operator-library.md) | Understand architecture and admission gates |
 | [Code layout](docs/design/code-layout.md) | Trace an operator across contracts, CUDA, bridge, PyTorch, and vLLM |
 | [Greedy speculative-verify design](docs/design/greedy-speculative-verify.md) | Read the ragged contract, ownership boundary, and deliberate exclusions |
-| [FP8 KV-cache design](docs/design/fp8-kv-cache.md) | Read the static-scale write contract, vendor-attention boundary, and open gates |
+| [FP8 KV-cache design](docs/design/fp8-kv-cache.md) | Read the static-scale write contract, qualified implementation boundary, and remaining system-value gate |
 | [Paged-decode design](docs/design/paged-decode-attention.md) | Read cache layouts, split-K semantics, and exclusions |
 | [vLLM provider guide](docs/guides/vllm-ir-provider.md) | Build, configure, validate, and benchmark engine adapters |
 | [Compatibility matrix](docs/compatibility.md) | Check Rust, CUDA, PyTorch, vLLM, and binary distribution boundaries |

@@ -62,7 +62,9 @@ spelling; Python package metadata uses the equivalent PEP 440 spelling.
 - static per-tensor/per-head FP8 E4M3 quantize-on-write in the existing fused
   RoPE+paged-KV path, including CPU oracles, byte-typed safe CUDA dispatch,
   checked Rust bridge, Stable ABI PyTorch schema, vLLM 0.24/0.25 admission, and
-  native-versus-FP8 benchmark metadata. H20 qualification remains open.
+  native-versus-FP8 benchmark metadata. Exact-byte, framework, operator,
+  clean-wheel, and real-engine invocation H20 gates pass; the system-level
+  native-versus-FP8 quality/capacity/serving gate remains open.
 
 ### Fixed
 
@@ -74,6 +76,9 @@ spelling; Python package metadata uses the equivalent PEP 440 spelling.
 - made fused RoPE+KV auto-functionalization preserve the complete packed cache
   on PyTorch 2.10 by exposing one real mutable cache allocation instead of two
   storage-aliasing views.
+- kept vLLM's static `quant_fp8` query quantization opaque alongside
+  `rotary_embedding`, allowing the official RoPE+KV fusion pattern to match and
+  reach Loom for FP8-cache models.
 
 ## 1.0.0-alpha.1 — 2026-07-22
 

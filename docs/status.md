@@ -79,9 +79,10 @@
 ## Validated
 
 - local formatting, clippy, tests, and release build;
-- the first `py3-none-linux_x86_64` native wheel built from a clean revision
-  for CUDA 13.1 and SM90, passed archive/ELF/RPATH/symbol/auditwheel checks,
-  and retained identical packaged library hashes across all runtime gates;
+- the current bridge-ABI-2 `py3-none-linux_x86_64` native wheel built from a
+  clean revision for CUDA 13.1 and SM90 passed archive/ELF/RPATH/symbol/
+  auditwheel checks and retained identical packaged library hashes across all
+  runtime gates;
 - fresh Python 3.11 venv installs passed `pip check`, package-local loading,
   BF16 H20 smoke, and the applicable full suites on PyTorch 2.10.0+cu128,
   PyTorch 2.11.0+cu130 with vLLM 0.24.0, and the same PyTorch with the official
@@ -106,11 +107,10 @@
   large-shape execution passed at `16x8192`.
 - PyTorch external-stream, mutation-schema/FakeTensor, `torch.compile`, and
   CUDA Graph tests passed with the Stable ABI dispatcher;
-- one exact dispatcher binary built with PyTorch 2.11.0+cu130 passed without
+- one exact ABI2 wheel built with PyTorch 2.11.0+cu130 passed without
   recompilation on PyTorch 2.10.0+cu128; the 2.11 vLLM 0.24 and 0.25.1
-  environments each passed 192 tests, while the vLLM-free 2.10 environment
-  passed 123 applicable tests with 44 vLLM-dependent skips and two deselected
-  vLLM-reference cases;
+  environments each passed 225 tests, while the vLLM-free 2.10 environment
+  passed 138 applicable tests with 63 vLLM-dependent skips;
 - the dispatcher exposes only `aoti_torch_*`/`torch_*` PyTorch symbol families,
   has no ATen/c10 C++ or raw CUDA launch dependency, and is protected by a
   source-level CI boundary;
@@ -122,7 +122,7 @@
   for both contiguous and padded row-strided logits, rejects short/overlapping
   regions before submission, and passes external-stream, compile, graph, and
   vLLM adapter tests;
-- official vLLM 0.24.0 and 0.25.1 packages each passed the complete 192-test
+- official vLLM 0.24.0 and 0.25.1 packages each passed the complete 225-test
   H20 Python GPU suite on Torch 2.11.0+cu130; the 0.25.1 process loaded its own
   `vllm/_C_stable_libtorch.abi3.so`, and the focused greedy/vLLM gate passed
   40 tests;
@@ -197,6 +197,17 @@
 - order-reversed engine batch-latency ratios ranged from `0.9957x` to
   `1.0180x`. Invocation and correctness are proven, but the end-to-end result
   crosses parity with provider order and does not establish a speedup.
+- static per-tensor/per-head FP8 E4M3 cache writes matched vLLM's exact packed
+  bytes across 16 FP16/BF16, NeoX/interleaved, NHD/HND cases, including untouched
+  padding and negative slots; current-stream, FakeTensor, fullgraph compile,
+  CUDA Graph, packed-cache, and bridge-telemetry gates pass;
+- one exact ABI2 wheel passed the vLLM 0.24/0.25 clean-install matrix, and the
+  fused BF16 operator was `1.317-1.378x` faster than vLLM's separate RoPE plus
+  cache-write submissions across all 32 per-tensor/per-head cases while using
+  half the physical cache bytes at this boundary;
+- both provider orders produced exact Qwen2.5-0.5B FP8-cache tokens and recorded
+  864 Loom submissions versus zero in each baseline. Latency ratios were
+  order-sensitive, so no stable model-level speedup is claimed;
 - greedy argmax+sampled-logprob PyTorch tests cover F32/FP16/BF16, Qwen's
   151,936-token vocabulary, explicit ties, padded rows, external streams,
   FakeTensor/schema validation, `torch.compile`, and CUDA Graph replay; the 30
@@ -215,7 +226,7 @@
 - selected-token PyTorch tests cover arbitrary IDs/ranks, F32/FP16/BF16,
   Qwen's 151,936-token vocabulary, ties, padded rows, external streams,
   FakeTensor/schema validation, `torch.compile`, and CUDA Graph replay;
-- the current complete H20 source suite passes 202 tests on each of vLLM
+- the current complete H20 source/wheel suite passes 225 tests on each of vLLM
   0.24.0 and 0.25.1; the Rust core passes 32 contract/oracle tests, and the
   CUDA-feature workspace includes eight safe-wrapper CPU-oracle tests;
 - the current bridge exposes 16 versioned operator/runtime symbols and no
@@ -374,9 +385,10 @@ FA3 for the engine's 128-1,024-token path.
   metadata, stochastic residual-distribution rejection, and KV commit/remap
   remain profile-gated after the real-engine verifier share measured below
   `0.2%`;
-- FP8 KV-cache H20 exact-byte/wheel qualification and system evidence for
-  measured cache bytes, quality, admitted context/batch, and TPOT; INT8 remains
-  unimplemented;
+- FP8 KV-cache pretrained native-versus-FP8 system evidence for quality,
+  admitted context/batch, engine peak memory, TTFT, and TPOT; the exact-byte,
+  operator, clean-wheel, and engine-invocation gates are complete, while INT8
+  remains unimplemented;
 - prefix-cache/preemption KV movement and compaction in a real scheduler path;
 - MoE routing/permutation/combine benefit around an unchanged vendor grouped
   GEMM;

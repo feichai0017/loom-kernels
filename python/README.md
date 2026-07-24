@@ -6,14 +6,14 @@ integration for [Loom Kernels](https://github.com/feichai0017/loom-kernels).
 [Project README](../README.md) · [Integration guide](../docs/guides/vllm-ir-provider.md) · [Operator catalog](../docs/operator-catalog.md)
 
 > [!IMPORTANT]
-> The first native wheel is H20-qualified but is not published to a package
-> index yet. A source-only wheel is intentionally unsupported:
+> The current bridge-ABI-2 native wheel is H20-qualified but is not published
+> to a package index yet. A source-only wheel is intentionally unsupported:
 > `pip wheel ./python` fails unless `build_wheel.py` has staged both native
 > libraries and their manifest.
 
 ## Qualified artifact
 
-The first matrix row is:
+The current matrix row is:
 
 | Axis | Qualified value |
 | --- | --- |
@@ -24,19 +24,19 @@ The first matrix row is:
 | vLLM extra | `>=0.24,<0.26` |
 | Native payload | `libloom_cuda_bridge.so`, `libloom_kernels_torch.so` |
 
-The qualified artifact's build tag encodes its ABI-1 row:
-`1cu131torch210sm90`. The exact H20 artifact and three clean-install gates are
-recorded in the
-[native-wheel evidence](../docs/results/h20-native-wheel-clean-install-20260723.json).
-That wheel contains the 192-test K0.7 surface. The subsequent greedy
-speculative revision passed 202 tests on both supported vLLM minors. The
-current source additionally adds static FP8 E4M3 KV quantize-on-write; its new
-H20 matrix and clean-wheel gates are still open, and no newer wheel has been
-published.
+The qualified artifact's build tag encodes bridge ABI 2:
+`2cu131torch210sm90`. The exact H20 artifact, binary audit, and three
+repository-free clean-install gates are recorded in the
+[native-wheel evidence](../docs/results/h20-native-wheel-clean-install-abi2-20260724.json).
+The same wheel passes 225 tests with each supported vLLM minor and 138
+applicable tests in the vLLM-free PyTorch 2.10 environment. It includes static
+FP8 E4M3 KV quantize-on-write and is bound to source revision
+`a2f37666ed31aa8781a26e150980a75f9f569171`.
 
-Because the current bridge signature is ABI 2, `build_wheel.py` emits the
-distinct candidate tag `2cu131torch210sm90`; it never overwrites or masquerades
-as the accepted ABI-1 artifact.
+The older `1cu131torch210sm90` ABI-1 wheel remains historical evidence only.
+`build_wheel.py` uses the ABI-specific tag so incompatible bridge signatures
+cannot overwrite or masquerade as one another. No native Python wheel has been
+published.
 
 ## Install a built wheel
 

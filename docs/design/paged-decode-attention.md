@@ -141,8 +141,8 @@ groups, odd head sizes, distinct value widths, F32/FP16/BF16, external
 streams, FakeTensor/schema, `torch.compile`, CUDA Graph replay,
 vLLM-interleaved cache strides, caller-owned split-K workspace, stable LSE
 merge, and launch telemetry. On NVIDIA H20 all 46 focused paged-decode tests,
-the 34-test paged-decode/vLLM gate, the safe Rust CUDA tests, and the
-192-test Python suite pass.
+the 34-test paged-decode/vLLM gate, the safe Rust CUDA tests, and the current
+225-test Python suite pass.
 
 The native-interleaved 156-case shape sweep establishes why the route is
 narrow: 82 cases beat FA3 and 74 lose. A focused 132-case Hq/Hkv `32/8`

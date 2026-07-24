@@ -57,15 +57,15 @@ CUDA_HOME=/usr/local/cuda-13.1 LOOM_CUDA_ARCHS=90 \
 
 python3 -m venv .venv-vllm
 .venv-vllm/bin/pip install \
-  'dist/loom_kernels-1.0.0a1-1cu131torch210sm90-py3-none-linux_x86_64.whl[vllm,test]'</code></pre>
+  'dist/loom_kernels-1.0.0a1-2cu131torch210sm90-py3-none-linux_x86_64.whl[vllm,test]'</code></pre>
       <p>
         The artifact contains exactly the Rust-owned
         <code>libloom_cuda_bridge.so</code> and boxed
         <code>libloom_kernels_torch.so</code> Stable ABI dispatcher. Its
         manifest binds the Git revision, CUDA toolkit, SM targets, PyTorch
         range, bridge ABI, and library hashes. Installed packages load only
-        this package-local pair. The first H20-qualified wheel is not published
-        to a package index yet.
+        this package-local pair. The current bridge-ABI-2 H20-qualified wheel
+        is not published to a package index yet.
       </p>
 
       <h2>Call PyTorch directly</h2>
@@ -119,12 +119,12 @@ min_p_filter_(sampling_logits_f32, min_p_f32)</code></pre>
 
       <h2>Compatibility is explicit</h2>
       <p>
-        Fresh native-wheel installs with official vLLM 0.24.0 and 0.25.1
-        packages each pass the 192-test K0.7 H20 suite on PyTorch 2.11. The
-        current source revision adds speculative verification and passes 202
-        tests on each minor; a new native wheel has not been published. The
-        same exact K0.7 wheel also passes its applicable Loom gates on PyTorch
-        2.10 without recompilation. A pinned Qwen2.5 draft/target engine gate
+        Fresh installs of the current bridge-ABI-2 wheel with official vLLM
+        0.24.0 and 0.25.1 packages each pass the 225-test H20 suite on PyTorch
+        2.11. The same exact wheel passes 138 applicable Loom gates on PyTorch
+        2.10 without recompilation. It includes speculative verification and
+        static FP8 KV quantize-on-write but has not been published. A pinned
+        Qwen2.5 draft/target engine gate
         proves exact native/Loom speculative invocation on vLLM 0.24; vLLM
         0.25 has source-suite compatibility evidence but no transferred
         model-level result.

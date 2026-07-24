@@ -97,7 +97,7 @@ transfer.
 Status: complete for the first Linux x86_64, CUDA 13.1, SM90 matrix row.
 
 - ~~qualify the next vLLM minor without weakening adapter gates~~ — official
-  vLLM 0.24.0 and 0.25.1 packages each pass the complete 192-test H20 GPU suite;
+  vLLM 0.24.0 and 0.25.1 packages each pass the complete 225-test H20 GPU suite;
 - ~~centralize runtime version admission and package metadata~~ — supported
   range is `vllm>=0.24,<0.26`, with registration-time series checks;
 - ~~document the current binary boundary and Stable ABI decision~~ — the
@@ -173,16 +173,18 @@ latency, memory, or temporary-allocation metric.
 
 ## K3: KV-Cache Update Family
 
-Status: in progress.
+Status: implementation and integration qualified; system-value exit open.
 
 - ~~RoPE plus paged-KV write~~ — Rust/CUDA/PyTorch, packed-QKV and NHD/HND
   layouts, vLLM compiler fusion, H20 named baseline, and exact-token Qwen2.5
   engine gates complete; operator benefit is measurable, model-level benefit
   remains open;
-- FP8 E4M3 quantize-on-write with explicit static per-tensor or per-head
-  scales is implemented through the Rust contract/oracle, safe CUDA backend,
-  checked bridge, Stable ABI PyTorch operator, and vLLM adapter; H20 exact-byte,
-  wheel, memory, quality, and TPOT gates remain open;
+- ~~FP8 E4M3 quantize-on-write with explicit static per-tensor or per-head
+  scales~~ — Rust contract/oracle, safe CUDA backend, checked bridge, Stable ABI
+  PyTorch operator, vLLM adapter, exact-byte H20 comparison, named operator
+  benchmark, current-stream/compile/graph checks, ABI2 clean wheel, and
+  order-reversed real-engine invocation are complete; the pretrained
+  native-versus-FP8 quality, admitted-capacity, TTFT, and TPOT gate remains open;
 - FlashAttention/FlashInfer consume the compressed cache directly, so Loom
   deliberately does not add a full-cache dequantize-on-read pass;
 - dynamic per-token-head scale caches and INT8 follow only when a named

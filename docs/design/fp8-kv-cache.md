@@ -86,6 +86,11 @@ The opt-in RoPE+KV compiler adapter admits:
 - per-tensor or per-KV-head static F32 scales;
 - FlashAttention or FlashInfer causal decoder layers without KV sharing.
 
+`configure_vllm_rope_paged_kv()` keeps both `rotary_embedding` and
+`quant_fp8` opaque to the compiler before enabling vLLM's official RoPE+KV
+fusion pass. The latter is required for static FP8 query quantization to remain
+matchable; Loom still replaces only the fused RoPE+cache-write boundary.
+
 It deliberately rejects FP8 E5M2, FP8 per-token-head, INT8, NVFP4,
 TurboQuant, MLA-specific layouts, and dynamic scale production. Unsupported
 contracts retain vLLM's original RoPE and cache-write path.
@@ -104,10 +109,10 @@ memory-bound gap that cannot be handled by its selected attention backend.
 
 ## Qualification Gates
 
-The implementation is complete in source through Rust contracts and CPU
-oracles, safe CUDA dispatch, the checked bridge, the Stable ABI PyTorch
-operator, vLLM registration, and benchmark tooling. It is not `supported`
-until the same H20 revision closes all of these gates:
+The implementation is complete through Rust contracts and CPU oracles, safe
+CUDA dispatch, the checked bridge, the Stable ABI PyTorch operator, vLLM
+registration, and a repository-free ABI2 wheel. Revision
+`a2f37666ed31aa8781a26e150980a75f9f569171` closed the first four H20 gates:
 
 1. exact FP8 bytes versus vLLM for FP16/BF16, per-tensor/per-head scales,
    packed QKV, padding, and NHD/HND layouts;
@@ -116,8 +121,13 @@ until the same H20 revision closes all of these gates:
 3. an operator comparison against vLLM's separate RoPE plus
    `reshape_and_cache_flash`;
 4. clean-install wheel tests on vLLM 0.24 and 0.25;
-5. a pretrained-model native-versus-FP8 gate reporting generated quality,
-   cache bytes, admitted context or batch size, TTFT, and TPOT.
+5. **Open:** a pretrained-model native-versus-FP8 gate reporting generated
+   quality, cache bytes, admitted context or batch size, TTFT, and TPOT.
 
-The first four gates prove implementation and integration. Only the fifth can
-support a system-level KV-compression value claim.
+The first four gates prove implementation and integration; the raw result is
+[recorded here](../results/h20-fp8-kv-cache-write-20260724.json). They show
+exact vLLM E4M3 bytes, a `2x` BF16-to-FP8 physical cache-storage ratio at the
+operator boundary, faster fused submissions across the measured sweep, and
+exact real-engine tokens with Loom path hits. Only the fifth gate can support
+a system-level KV-compression value claim, so this family remains
+`in progress` rather than `supported`.
