@@ -185,6 +185,10 @@ Status: implementation and integration qualified; system-value exit open.
   benchmark, current-stream/compile/graph checks, ABI2 clean wheel, and
   order-reversed real-engine invocation are complete; the pretrained
   native-versus-FP8 quality, admitted-capacity, TTFT, and TPOT gate remains open;
+- ~~process-isolated native/FP8/Loom system measurement harness~~ — cache
+  capacity, CUDA memory, perplexity, TTFT, TPOT, throughput, token divergence,
+  package provenance, and path telemetry are captured under a pinned model and
+  corpus contract; an accepted order-reversed large-model artifact remains open;
 - FlashAttention/FlashInfer consume the compressed cache directly, so Loom
   deliberately does not add a full-cache dequantize-on-read pass;
 - dynamic per-token-head scale caches and INT8 follow only when a named

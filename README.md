@@ -89,8 +89,10 @@ The physical cache allocation is `2x` smaller than BF16 at this operator
 boundary, and the fused path is `1.317-1.378x` faster than vLLM's separate RoPE
 and cache-write submissions across the measured sweep. It remains `in progress`
 because the pretrained native-versus-FP8 quality, admitted-capacity, TTFT, and
-TPOT gate is still open; order-reversed engine latency does not support a
-stable model-level speedup claim. See the
+TPOT gate is still open. A process-isolated benchmark now captures that full
+contract with pinned model/corpus and package provenance, but no accepted
+large-model artifact exists yet; order-reversed engine latency does not
+support a stable model-level speedup claim. See the
 [FP8 KV-cache design](docs/design/fp8-kv-cache.md).
 
 The detailed contracts and exit criteria live in the

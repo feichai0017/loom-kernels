@@ -124,6 +124,15 @@ registration, and a repository-free ABI2 wheel. Revision
 5. **Open:** a pretrained-model native-versus-FP8 gate reporting generated
    quality, cache bytes, admitted context or batch size, TTFT, and TPOT.
 
+`benchmarks/vllm_fp8_kv_system.py` makes the fifth gate reproducible. It runs
+native vLLM, static-FP8 vLLM, and static-FP8 Loom in isolated processes while
+holding graph partitioning constant. The report records the pinned model
+revision or checkpoint digest, corpus SHA-256, native wheel manifest, cache
+capacity, CUDA memory, perplexity, TTFT, TPOT, throughput, token divergence,
+and Loom launch telemetry. Both variant orders must pass before an artifact is
+accepted. Omitting the quality corpus or model revision leaves the system gate
+explicitly `not_run`.
+
 The first four gates prove implementation and integration; the raw result is
 [recorded here](../results/h20-fp8-kv-cache-write-20260724.json). They show
 exact vLLM E4M3 bytes, a `2x` BF16-to-FP8 physical cache-storage ratio at the

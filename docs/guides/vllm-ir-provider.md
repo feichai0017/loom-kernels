@@ -452,6 +452,15 @@ PY
   --kv-cache-dtype fp8 --provider-order baseline-first \
   --result-json /tmp/qwen25-rope-paged-kv-fp8.json
 
+.venv-vllm/bin/python benchmarks/vllm_fp8_kv_system.py \
+  --model /path/to/Qwen2.5-7B-Instruct \
+  --model-revision <pinned-revision-or-checkpoint-digest> \
+  --quality-jsonl /path/to/pinned-quality-corpus.jsonl \
+  --variant-order native-first \
+  --result-json /tmp/fp8-kv-system-native-first.json
+
+# Repeat with --variant-order fp8-first and a distinct result path.
+
 .venv-vllm/bin/python benchmarks/vllm_greedy_sample_logprobs.py \
   --rows 1,2,4,8,16,32,64,128 --vocab-size 151936 --dtype bf16 \
   --warmup 100 --iterations 1000 --repeats 7
