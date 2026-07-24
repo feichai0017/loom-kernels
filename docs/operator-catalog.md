@@ -132,9 +132,9 @@ the boundary or an isolated implementation is measurably useful.
 
 ## Implementation Order
 
-1. Finish H20 and clean-wheel qualification for the static FP8 E4M3
-   quantize-on-write path, then prove cache bytes, admitted context/batch,
-   quality, and TPOT together.
+1. Finish system-level qualification for the static FP8 E4M3 quantize-on-write
+   path by proving cache bytes, admitted context/batch, quality, TTFT, and TPOT
+   together; H20 operator and clean-wheel qualification are complete.
 2. Complete the sampling tail with fused preprocessing, penalties, top-k/top-p,
    renormalization, deterministic RNG, and top-k logprobs.
 3. Add KV block movement for a real prefix-cache, preemption, or compaction
